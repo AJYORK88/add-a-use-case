@@ -58,12 +58,16 @@ public class SubmissionStatusService {
      * last and first name.
      */
     public Map<Student, List<SubmittableItem>> findOwedItems(Integer sectionId, Collection<SubmittableItem> items, String week) {
-        // Only a student who is on a team and whose account is active owes anything (BR-team-assignment-required,
-        // BR-student-lifecycle), and only such a student counts as a teammate she must evaluate
-        List<Student> eligible = this.studentRepository.findBySectionSectionId(sectionId).stream()
-                .filter(student -> student.getTeam() != null && student.isEnabled())
+        // The course section's students on a team who were active in that week (BR-student-active-week). The query
+        // fetches each one's history, so asking isActiveIn costs no select per student.
+        List<Student> activeInWeek = this.studentRepository.findBySectionSectionId(sectionId).stream()
+                .filter(student -> student.getTeam() != null && student.isActiveIn(week))
                 .sorted(BY_TEAM_THEN_NAME)
                 .toList();
+
+        // Who owes: only a student who is also active now (BR-team-assignment-required, BR-student-lifecycle). A
+        // student deactivated after the week is not reminded about it.
+        List<Student> eligible = activeInWeek.stream().filter(Student::isEnabled).toList();
 
         // Read each kind of submission once for the whole course section, not once per student
         Set<Integer> reportingStudentIds = items.contains(SubmittableItem.WEEKLY_ACTIVITY_REPORT)
@@ -72,7 +76,9 @@ public class SubmissionStatusService {
         Map<Integer, Set<Integer>> evaluateeIdsByEvaluator = items.contains(SubmittableItem.PEER_EVALUATION)
                 ? this.evaluationService.findEvaluateeIdsByEvaluator(sectionId, week)
                 : Map.of();
-        Map<Integer, Set<Integer>> teammateIdsByTeam = eligible.stream()
+        // Whom she owes an evaluation of: every member of her team who was active in that week, whatever that member's
+        // status now, so a teammate deactivated after the week is still owed one for it (BR-submission-owed)
+        Map<Integer, Set<Integer>> teammateIdsByTeam = activeInWeek.stream()
                 .collect(Collectors.groupingBy(student -> student.getTeam().getTeamId(),
                         Collectors.mapping(Student::getId, Collectors.toSet())));
 
@@ -83,8 +89,8 @@ public class SubmissionStatusService {
                 boolean submitted = switch (item) {
                     // At least one activity for the week, in any status
                     case WEEKLY_ACTIVITY_REPORT -> reportingStudentIds.contains(student.getId());
-                    // Every active member of her current team evaluated, herself included. Evaluations of anyone
-                    // else (a former teammate, a deactivated one) neither count toward this nor are required.
+                    // Every member of her current team who was active in that week evaluated, herself included.
+                    // Evaluations of anyone else (a former teammate, one inactive that week) neither count nor are required.
                     case PEER_EVALUATION -> evaluateeIdsByEvaluator.getOrDefault(student.getId(), Set.of())
                             .containsAll(teammateIdsByTeam.get(student.getTeam().getTeamId()));
                 };

@@ -10,6 +10,7 @@ public class PeerEvaluationAverage {
     private String lastName;
     private String email;
     private String teamName;
+    private boolean deactivated; // Her account status now (UC-STU-deactivate-student); only instructors read a report of another student
     private Double averageTotalScore;
     private List<String> publicComments;
     private List<String> privateComments;
@@ -65,6 +66,14 @@ public class PeerEvaluationAverage {
 
     public void setTeamName(String teamName) {
         this.teamName = teamName;
+    }
+
+    public boolean isDeactivated() {
+        return deactivated;
+    }
+
+    public void setDeactivated(boolean deactivated) {
+        this.deactivated = deactivated;
     }
 
     public Double getAverageTotalScore() {

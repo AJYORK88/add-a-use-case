@@ -34,6 +34,7 @@ public class EvaluationService {
     private static final String RUBRIC_MISMATCH_MESSAGE = "This evaluation was scored against a different set of criteria and can no longer be updated.";
     private static final String NOT_PREVIOUS_WEEK_MESSAGE = "You can only submit evaluations for the previous week.";
     private static final String WINDOW_CLOSED_MESSAGE = "The submission window for this peer evaluation has closed, so it can no longer be changed.";
+    static final String EVALUATOR_NOT_ACTIVE_MESSAGE = "You may submit a peer evaluation only for a week you were active in.";
 
     private final PeerEvaluationRepository evaluationRepository;
     private final StudentRepository studentRepository;
@@ -67,6 +68,10 @@ public class EvaluationService {
             throw new PeerEvaluationIllegalArgumentException("The evaluator and evaluatee must be on the same team.");
         }
 
+        // Both must have been active in that week (BR-student-active-week), checked before the duplicate check so a
+        // refusal for an inactive teammate says so rather than reporting an evaluation she was never owed
+        requireBothActiveIn(newPeerEvaluation.getEvaluator(), newPeerEvaluation.getEvaluatee(), newPeerEvaluation.getWeek());
+
         // Make sure this is not a duplicate evaluation
         if (this.evaluationRepository.findByWeekAndEvaluatorIdAndEvaluateeId(newPeerEvaluation.getWeek(), newPeerEvaluation.getEvaluator().getId(), newPeerEvaluation.getEvaluatee().getId()).isPresent()) {
             throw new PeerEvaluationIllegalArgumentException("You have already submitted an evaluation for " + newPeerEvaluation.getEvaluatee().getFirstName() + " in this week.");
@@ -81,6 +86,7 @@ public class EvaluationService {
                     // The week is read off the stored evaluation rather than off the update, because the caller
                     // writes the payload and could otherwise name an open week to reopen a closed evaluation.
                     requireOpenSubmissionWindow(oldEvaluation.getEvaluator().getSection(), oldEvaluation.getWeek(), WINDOW_CLOSED_MESSAGE);
+                    requireBothActiveIn(oldEvaluation.getEvaluator(), oldEvaluation.getEvaluatee(), oldEvaluation.getWeek());
                     rescore(oldEvaluation, update.getRatings());
                     oldEvaluation.setPublicComment(update.getPublicComment());
                     oldEvaluation.setPrivateComment(update.getPrivateComment());
@@ -114,6 +120,23 @@ public class EvaluationService {
 
         if (!previousWeek().equals(week)) {
             throw new PeerEvaluationIllegalArgumentException(outOfWindowMessage);
+        }
+    }
+
+    /**
+     * Refuses a peer evaluation, or an edit of one, for a week the evaluator or the evaluatee was not active in
+     * (BR-student-active-week; UC-EVA-submit-evaluation 1d and 4b). Whether she was active is
+     * {@link Student#isActiveIn}'s answer, never worked out here.
+     *
+     * <p>The refusal for an inactive evaluatee names her but never says why (CO-ferpa): a student is never told another
+     * student's account status.
+     */
+    private void requireBothActiveIn(Student evaluator, Student evaluatee, String week) {
+        if (!evaluator.isActiveIn(week)) {
+            throw new PeerEvaluationIllegalArgumentException(EVALUATOR_NOT_ACTIVE_MESSAGE);
+        }
+        if (!evaluatee.isActiveIn(week)) {
+            throw new PeerEvaluationIllegalArgumentException(evaluatee.getFirstName() + " " + evaluatee.getLastName() + " is not evaluated for that week.");
         }
     }
 
@@ -178,6 +201,8 @@ public class EvaluationService {
         peerEvaluationAverage.setFirstName(student.getFirstName());
         peerEvaluationAverage.setLastName(student.getLastName());
         peerEvaluationAverage.setEmail(student.getEmail());
+        // Her status now, not in the week: the instructor's report marks a student deactivated since (UC-STU-deactivate-student)
+        peerEvaluationAverage.setDeactivated(!student.isEnabled());
         // Student.team is optional: a student is enrolled in a course section before she is assigned to a team, and
         // BR-team-assignment-required keeps her from authoring until she is, so the team name is simply absent for
         // her. Dereferencing it here was a 500 on her own results page and on the instructor's performance dashboard
@@ -220,8 +245,11 @@ public class EvaluationService {
 
         report.setSectionName(this.sectionRepository.findById(sectionId).orElseThrow(() -> new ObjectNotFoundException("section", sectionId)).getSectionName());
 
-        // Get all students in the section
-        List<Student> students = this.studentRepository.findBySectionSectionId(sectionId).stream().filter(student -> student.getTeam() != null).collect(Collectors.toList());
+        // Every student in the course section who is on a team and was active in that week (BR-student-active-week).
+        // A student deactivated after the week is still listed, marked deactivated. The query fetches the history.
+        List<Student> students = this.studentRepository.findBySectionSectionId(sectionId).stream()
+                .filter(student -> student.getTeam() != null && student.isActiveIn(week))
+                .collect(Collectors.toList());
 
         // For each student, compute her average total score, collect all public comments and private comments, and compute rating averages for each criterion.
         students.forEach(student -> {

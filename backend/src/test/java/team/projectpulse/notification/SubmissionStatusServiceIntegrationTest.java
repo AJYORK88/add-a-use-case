@@ -15,7 +15,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * BR-submission-owed against the seed data and the real queries. In course section 2 for 2023-W32, Team1 (John,
  * Eric, Jerry) evaluated every teammate and John and Eric reported activities; Team2 and Team3 submitted nothing;
- * Tracy, Arline, Shad, and Lynne are on no team.
+ * Tracy, Arline, Shad, and Lynne are on no team. What a deactivation does to the weeks around it is in
+ * {@code StudentActiveWeekIntegrationTest}.
  */
 @DisplayName("Integration tests for who owes a weekly item")
 class SubmissionStatusServiceIntegrationTest extends AbstractIntegrationTest {
@@ -62,20 +63,6 @@ class SubmissionStatusServiceIntegrationTest extends AbstractIntegrationTest {
         // Then
         assertThat(names(this.submissionStatusService.findOwing(SECTION_ID, SubmittableItem.WEEKLY_ACTIVITY_REPORT, WEEK)))
                 .contains("Eric Hudson");
-    }
-
-    @Test
-    void testAnEvaluationOfADeactivatedTeammateIsNotRequired() {
-        // Given: Jerry's account is deactivated, and Team1's evaluations of him are deleted
-        Student jerry = this.entityManager.createQuery("select s from Student s where s.email = 'j.moon@abc.edu'", Student.class).getSingleResult();
-        jerry.setEnabled(false);
-        this.entityManager.createQuery("delete from Rating r where r.peerEvaluation.evaluatee = :jerry").setParameter("jerry", jerry).executeUpdate();
-        this.entityManager.createQuery("delete from PeerEvaluation e where e.evaluatee = :jerry").setParameter("jerry", jerry).executeUpdate();
-        this.entityManager.flush();
-
-        // Then: John and Eric still evaluated every active teammate, and Jerry owes nothing
-        assertThat(names(this.submissionStatusService.findOwing(SECTION_ID, SubmittableItem.PEER_EVALUATION, WEEK)))
-                .doesNotContain("John Smith", "Eric Hudson", "Jerry Moon");
     }
 
     private static List<String> names(List<Student> students) {

@@ -90,6 +90,11 @@ public class ActivityService {
         if (submitter.getTeam() == null) {
             throw new ActivityIllegalArgumentException("You must be assigned to a team before submitting a weekly activity report.");
         }
+        // Only for a week she was active in (BR-student-active-week; UC-WAR 3a). Creation is the only gate needed:
+        // updateActivity never changes the week, so every stored activity of hers is in a week she was active in.
+        if (!submitter.isActiveIn(newActivity.getWeek())) {
+            throw new ActivityIllegalArgumentException("You may submit a weekly activity report only for a week you were active in.");
+        }
         newActivity.setStudent(submitter);
         newActivity.setTeam(submitter.getTeam());
         return this.activityRepository.save(newActivity);
