@@ -81,11 +81,15 @@ class StudentTest {
 
     @Test
     void testDeactivatedAndReactivatedInOneWeekIsActiveInIt() {
-        this.john.addStatusChange(StudentStatusChangeType.DEACTIVATED, LocalDateTime.of(2023, 8, 8, 10, 0));
-        this.john.addStatusChange(StudentStatusChangeType.REACTIVATED, LocalDateTime.of(2023, 8, 10, 10, 0));
+        // Given: inactive going into W32 (deactivated in W30), then reactivated and deactivated again within W32. The
+        // latest change before W32 is a deactivation, so only a change inside W32 can make W32 active.
+        this.john.addStatusChange(StudentStatusChangeType.DEACTIVATED, LocalDateTime.of(2023, 7, 30, 12, 0)); // W30
+        this.john.addStatusChange(StudentStatusChangeType.REACTIVATED, LocalDateTime.of(2023, 8, 8, 10, 0)); // W32
+        this.john.addStatusChange(StudentStatusChangeType.DEACTIVATED, LocalDateTime.of(2023, 8, 10, 10, 0)); // W32
 
+        // Then: any part of a week counts (BR-student-active-week)
+        assertThat(this.john.isActiveIn("2023-W31")).isFalse();
         assertThat(this.john.isActiveIn("2023-W32")).isTrue();
-        assertThat(this.john.isActiveIn("2023-W33")).isTrue();
     }
 
     @Test
