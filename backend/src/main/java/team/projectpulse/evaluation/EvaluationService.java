@@ -2,6 +2,7 @@ package team.projectpulse.evaluation;
 
 import team.projectpulse.section.Section;
 import team.projectpulse.section.SectionRepository;
+import team.projectpulse.system.UserUtils;
 import team.projectpulse.system.WeekKeys;
 import team.projectpulse.system.exception.PeerEvaluationIllegalArgumentException;
 import team.projectpulse.system.exception.ObjectNotFoundException;
@@ -34,19 +35,23 @@ public class EvaluationService {
     private static final String RUBRIC_MISMATCH_MESSAGE = "This evaluation was scored against a different set of criteria and can no longer be updated.";
     private static final String NOT_PREVIOUS_WEEK_MESSAGE = "You can only submit evaluations for the previous week.";
     private static final String WINDOW_CLOSED_MESSAGE = "The submission window for this peer evaluation has closed, so it can no longer be changed.";
+    private static final String NOT_A_STUDENT_MESSAGE = "Only a student may submit a peer evaluation.";
+    private static final String NO_TEAM_MESSAGE = "You must be assigned to a team before submitting a peer evaluation.";
     static final String EVALUATOR_NOT_ACTIVE_MESSAGE = "You may submit a peer evaluation only for a week you were active in.";
 
     private final PeerEvaluationRepository evaluationRepository;
     private final StudentRepository studentRepository;
     private final SectionRepository sectionRepository;
     private final Clock clock; // Clock bean is defined in PeerEvaluationToolApplication.java, this object is for unit testing purposes.
+    private final UserUtils userUtils;
 
 
-    public EvaluationService(PeerEvaluationRepository evaluationRepository, StudentRepository studentRepository, SectionRepository sectionRepository, Clock clock) {
+    public EvaluationService(PeerEvaluationRepository evaluationRepository, StudentRepository studentRepository, SectionRepository sectionRepository, Clock clock, UserUtils userUtils) {
         this.evaluationRepository = evaluationRepository;
         this.studentRepository = studentRepository;
         this.sectionRepository = sectionRepository;
         this.clock = clock;
+        this.userUtils = userUtils;
     }
 
     public PeerEvaluation addPeerEvaluation(PeerEvaluation newPeerEvaluation) {
@@ -57,7 +62,7 @@ public class EvaluationService {
         // because a student is enrolled in a course section before she is assigned to a team
         Team evaluatorTeam = newPeerEvaluation.getEvaluator().getTeam();
         if (evaluatorTeam == null) {
-            throw new PeerEvaluationIllegalArgumentException("You must be assigned to a team before submitting a peer evaluation.");
+            throw new PeerEvaluationIllegalArgumentException(NO_TEAM_MESSAGE);
         }
 
         // Make sure the evaluator and evaluatee are on the same team. Compare team ids: Team does not override
@@ -78,6 +83,33 @@ public class EvaluationService {
         }
 
         return this.evaluationRepository.save(newPeerEvaluation);
+    }
+
+    /**
+     * The caller's teammates she evaluates for a week: every member of her team who was active in it, herself included
+     * (BR-student-active-week). The team is the caller's own, derived through {@code UserUtils}, so nothing the caller
+     * sends names a team. The list carries no account status (CO-ferpa); who is on it is the server's decision.
+     *
+     * @throws IllegalArgumentException            if the week is not a valid week key
+     * @throws PeerEvaluationIllegalArgumentException if the caller is not a student, is on no team (UC-EVA 1c), or was
+     *                                             not herself active in the week (UC-EVA 1d)
+     */
+    public List<Student> findEvaluatees(String week) {
+        WeekKeys.requireValid(week);
+        Integer callerId = this.userUtils.getUserId();
+        Student caller = (callerId == null ? null : this.studentRepository.findById(callerId).orElse(null));
+        if (caller == null) {
+            throw new PeerEvaluationIllegalArgumentException(NOT_A_STUDENT_MESSAGE);
+        }
+        if (caller.getTeam() == null) {
+            throw new PeerEvaluationIllegalArgumentException(NO_TEAM_MESSAGE);
+        }
+        if (!caller.isActiveIn(week)) {
+            throw new PeerEvaluationIllegalArgumentException(EVALUATOR_NOT_ACTIVE_MESSAGE);
+        }
+        return this.studentRepository.findByTeamTeamId(caller.getTeam().getTeamId()).stream()
+                .filter(teammate -> teammate.isActiveIn(week))
+                .toList();
     }
 
     public PeerEvaluation updatePeerEvaluation(Integer evaluationId, PeerEvaluation update) {

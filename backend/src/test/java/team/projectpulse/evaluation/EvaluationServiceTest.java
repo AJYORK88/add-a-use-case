@@ -8,6 +8,7 @@ import team.projectpulse.section.Section;
 import team.projectpulse.section.SectionRepository;
 import team.projectpulse.student.Student;
 import team.projectpulse.student.StudentRepository;
+import team.projectpulse.system.UserUtils;
 import team.projectpulse.system.exception.PeerEvaluationIllegalArgumentException;
 import team.projectpulse.team.Team;
 import team.projectpulse.user.MyUserPrincipal;
@@ -45,6 +46,8 @@ class EvaluationServiceTest {
     SectionRepository sectionRepository;
     @Mock
     Clock clock; // Mock the clock bean
+    @Mock
+    UserUtils userUtils;
 
     @InjectMocks
     EvaluationService evaluationService;
@@ -499,6 +502,61 @@ class EvaluationServiceTest {
         assertThat(throwable)
                 .isInstanceOf(PeerEvaluationIllegalArgumentException.class)
                 .hasMessage("You may submit a peer evaluation only for a week you were active in.");
+    }
+
+    @Test
+    void testFindEvaluateesListsTeammatesActiveInTheWeekIncludingHerself() {
+        // Given: John asks for W31; Jerry was not active in W31, and Eric was deactivated after it
+        Student jerry = this.students.get(2);
+        jerry.deactivate(LocalDateTime.of(2023, 7, 30, 12, 0));
+        this.eric.deactivate(LocalDateTime.of(2023, 8, 20, 23, 30));
+        given(this.userUtils.getUserId()).willReturn(3);
+        given(this.studentRepository.findById(3)).willReturn(Optional.of(this.john));
+        given(this.studentRepository.findByTeamTeamId(1)).willReturn(List.of(this.john, this.eric, jerry));
+
+        // When
+        List<Student> evaluatees = this.evaluationService.findEvaluatees("2023-W31");
+
+        // Then
+        assertThat(evaluatees).containsExactly(this.john, this.eric);
+    }
+
+    @Test
+    void testFindEvaluateesRefusesACallerWhoIsNotAStudent() {
+        given(this.userUtils.getUserId()).willReturn(1); // Bingyang, an instructor
+        given(this.studentRepository.findById(1)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> this.evaluationService.findEvaluatees("2023-W31"))
+                .isInstanceOf(PeerEvaluationIllegalArgumentException.class)
+                .hasMessage("Only a student may submit a peer evaluation.");
+    }
+
+    @Test
+    void testFindEvaluateesRefusesACallerOnNoTeam() {
+        Student tracy = new Student("tracy", "Tracy", "Nicholson", "t.nicholson@abc.edu", "123456", true, "student");
+        given(this.userUtils.getUserId()).willReturn(15);
+        given(this.studentRepository.findById(15)).willReturn(Optional.of(tracy));
+
+        assertThatThrownBy(() -> this.evaluationService.findEvaluatees("2023-W31"))
+                .isInstanceOf(PeerEvaluationIllegalArgumentException.class)
+                .hasMessage("You must be assigned to a team before submitting a peer evaluation.");
+    }
+
+    @Test
+    void testFindEvaluateesRefusesACallerNotActiveInTheWeek() {
+        this.john.deactivate(LocalDateTime.of(2023, 7, 30, 12, 0));
+        given(this.userUtils.getUserId()).willReturn(3);
+        given(this.studentRepository.findById(3)).willReturn(Optional.of(this.john));
+
+        assertThatThrownBy(() -> this.evaluationService.findEvaluatees("2023-W31"))
+                .isInstanceOf(PeerEvaluationIllegalArgumentException.class)
+                .hasMessage("You may submit a peer evaluation only for a week you were active in.");
+    }
+
+    @Test
+    void testFindEvaluateesRefusesAMalformedWeek() {
+        assertThatThrownBy(() -> this.evaluationService.findEvaluatees("2023-33"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     // Aug 8, 2023 falls in 2023-W32, which makes 2023-W31 the previous week

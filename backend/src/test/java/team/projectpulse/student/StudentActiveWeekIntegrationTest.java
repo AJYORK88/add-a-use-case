@@ -125,7 +125,56 @@ class StudentActiveWeekIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.data.peerEvaluationAverages[?(@.studentId == " + ERIC_ID + ")].deactivated").value(Matchers.contains(false)));
     }
 
+    @Test
+    void testBoundaryWeekHeIsInHisTeammatesEvaluateeList() throws Exception {
+        deactivateJohnNow();
+
+        // Names only, never a status (CO-ferpa)
+        this.mockMvc.perform(get(this.baseUrl + "/evaluations/weeks/" + WEEK + "/evaluatees").header(HttpHeaders.AUTHORIZATION, this.studentEricToken))
+                .andExpect(jsonPath("$.flag").value(true))
+                .andExpect(jsonPath("$.code").value(StatusCode.SUCCESS))
+                .andExpect(jsonPath("$.data[*].id").value(Matchers.containsInAnyOrder(JOHN_ID, ERIC_ID, 6)))
+                .andExpect(jsonPath("$.data[0].*", Matchers.hasSize(3)))
+                .andExpect(jsonPath("$.data[0].id").exists())
+                .andExpect(jsonPath("$.data[0].firstName").exists())
+                .andExpect(jsonPath("$.data[0].lastName").exists());
+    }
+
     // ----- Inactive week: deactivated in W30, reactivated in W33, so inactive in W32 -----
+
+    @Test
+    void testInactiveWeekHeIsAbsentFromHisTeammatesEvaluateeList() throws Exception {
+        givenJohnWasInactiveInW31AndW32();
+
+        this.mockMvc.perform(get(this.baseUrl + "/evaluations/weeks/" + WEEK + "/evaluatees").header(HttpHeaders.AUTHORIZATION, this.studentEricToken))
+                .andExpect(jsonPath("$.flag").value(true))
+                .andExpect(jsonPath("$.data[*].id").value(Matchers.containsInAnyOrder(ERIC_ID, 6)));
+    }
+
+    @Test
+    void testInactiveWeekHeHasNoEvaluateeListOfHisOwn() throws Exception {
+        givenJohnWasInactiveInW31AndW32();
+
+        this.mockMvc.perform(get(this.baseUrl + "/evaluations/weeks/" + WEEK + "/evaluatees").header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(jsonPath("$.flag").value(false))
+                .andExpect(jsonPath("$.code").value(StatusCode.INVALID_ARGUMENT))
+                .andExpect(jsonPath("$.message").value("You may submit a peer evaluation only for a week you were active in."));
+    }
+
+    @Test
+    void testAnInstructorHasNoEvaluateeList() throws Exception {
+        this.mockMvc.perform(get(this.baseUrl + "/evaluations/weeks/" + WEEK + "/evaluatees").header(HttpHeaders.AUTHORIZATION, this.adminBingyangToken))
+                .andExpect(jsonPath("$.flag").value(false))
+                .andExpect(jsonPath("$.code").value(StatusCode.INVALID_ARGUMENT))
+                .andExpect(jsonPath("$.message").value("Only a student may submit a peer evaluation."));
+    }
+
+    @Test
+    void testAMalformedWeekIsABadRequest() throws Exception {
+        this.mockMvc.perform(get(this.baseUrl + "/evaluations/weeks/2023-32/evaluatees").header(HttpHeaders.AUTHORIZATION, this.studentEricToken))
+                .andExpect(jsonPath("$.flag").value(false))
+                .andExpect(jsonPath("$.code").value(StatusCode.INVALID_ARGUMENT));
+    }
 
     @Test
     void testInactiveWeekAnEvaluationOfHimIsRefusedByName() throws Exception {
