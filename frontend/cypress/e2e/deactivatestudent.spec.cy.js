@@ -165,8 +165,7 @@ describe('The Deactivated label on instructor pages', () => {
     ).as('roster')
     cy.visit('/teams')
     cy.wait('@roster')
-    cy.get('[data-team-id=1]').should('not.exist') // Rows start collapsed
-    cy.get('.el-table__expand-icon').first().click()
+    // Teams.vue renders every team expanded (default-expand-all), so Team1's members are on the page already
     cy.get('[data-team-id=1]').within(() => {
       cy.contains('.trello-card', 'John Smith')
         .find('[data-cy=member-deactivated]')
