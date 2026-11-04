@@ -236,7 +236,17 @@ describe('A student never sees another student’s status (CO-ferpa)', () => {
   })
 
   it('shows no status on the team activities page', () => {
+    // The real backend, asked for W32, where the seed has Team1's activities: the page opens on the browser's own
+    // current week, which has none, and an empty page would pass the check below for nothing
+    cy.intercept('POST', '**/activities/search*', (req) => {
+      req.body.week = '2023-W32'
+    }).as('activities')
     cy.visit('/activities/team-activities')
+    cy.wait('@activities')
+    cy.contains('h3', "John Smith's Weekly Activities").should('be.visible')
+    cy.contains('h3', "Eric Hudson's Weekly Activities").should('be.visible')
+
     cy.get('[data-cy=member-deactivated]').should('not.exist')
+    cy.contains('Deactivated').should('not.exist')
   })
 })
