@@ -1,7 +1,7 @@
 # Notifications (NOT) Design
 
 > Realizes: UC-NOT-remind-non-submitters, FR-NOT-weekly-reminder (amended 2026-10-03)
-> Depends on: BR-submission-owed (the one definition of "has not submitted"), BR-active-weeks, BR-evaluation-submission-window, BR-section-scoped-access, BR-role-based-access, BR-team-assignment-required, BR-student-lifecycle, CO-ferpa, DE-gmail-smtp
+> Depends on: BR-submission-owed (the one definition of "has not submitted"), BR-active-weeks, BR-evaluation-submission-window, BR-section-scoped-access, BR-role-based-access, BR-team-assignment-required, BR-student-lifecycle, BR-student-active-week (amended 2026-11-04 with [design/stu.md](stu.md)), CO-ferpa, DE-gmail-smtp
 > See: [use cases](../requirements/use-cases.md#notifications), [SRS non-use-case FRs](../requirements/software-requirements-specification.md#notification-requirements), [architectural-design.md](architectural-design.md#performance-tracking-components) (performance-tracking component view, Crosscutting Concepts)
 > Designed against `main` at `cf0beee` (2026-09-30).
 
@@ -103,7 +103,7 @@ sequenceDiagram
     SPA->>RC: GET /sections/{sectionId}/submission-status?item=PEER_EVALUATION
     Note over SPA,RC: Both requests pass the route guard in the API contract
     RC->>SS: findOwing(sectionId, item, WeekKeys.previousWeek(clock))
-    SS-->>RC: students on a team, enabled, not every active teammate evaluated
+    SS-->>RC: students on a team, enabled and active in the week, not every teammate active in the week evaluated
     RC-->>SPA: 200, weekActive, week range, due time, owing students by team (step 4)
     alt weekActive is false (4a)
         SPA-->>I: "Reminders are sent only for an active week", no send button (4a1)
@@ -176,7 +176,7 @@ The email itself: subject "ProjectPulse Submission Reminder"; body greets the st
 
 **Which week, and when to remind.** Both items are about the previous week, computed from the injected `Clock` by `WeekKeys` (calendar time, per Crosscutting Concepts). An item is reminded only when that week is active, which is the existing eligibility query called with the previous week instead of the current one. Rejected: keeping the current-week gate, which skips the reminder for the last active week's evaluation and sends one in the first active week for an evaluation that cannot yet be submitted.
 
-**Who owes a peer evaluation.** A student owes it until her evaluations for the week cover every member of her current team, herself included (BR-submission-owed), computed from one query of evaluator to evaluatee ids and one load of the section's students. Rejected: "any row", the old report's rule, because `addPeerEvaluation` accepts one evaluatee at a time and a half-finished set is real. Accepted consequence: a teammate added mid-window makes the others owe him an evaluation.
+**Who owes a peer evaluation.** A student owes it until her evaluations for the week cover every member of her current team who was active in that week, herself included (BR-submission-owed, BR-student-active-week), computed from one query of evaluator to evaluatee ids and one load of the section's students with their deactivation history. Who owes and who is owed are different sets: she owes only if her account is active now *and* she was active in the week, but she is owed an evaluation of every teammate active in the week whatever that teammate's status now, so a teammate deactivated after the week is still owed one. Whether a student was active in a week is `Student.isActiveIn` ([design/stu.md](stu.md#active-in-a-week)); this slice never computes it. Rejected: "any row", the old report's rule, because `addPeerEvaluation` accepts one evaluatee at a time and a half-finished set is real. Accepted consequence: a teammate added mid-window makes the others owe him an evaluation.
 
 **The request never chooses the week it sends for.** The server computes the week. The request names the week the instructor reviewed only so the server can refuse a send when the two differ: a Confirm that lands after Monday midnight would otherwise remind students about a week nobody reviewed. Rejected: a client-supplied week that sets the scope, which would let a nudge ask for a peer evaluation whose window has closed and puts a scope-setting value in a caller-controlled body.
 
@@ -218,7 +218,7 @@ No delta. The area reads `Activity`, `PeerEvaluation`, `Student`, `Team`, and `S
 | UC-NOT authorization | integration | An instructor not assigned to the section (a plain instructor, and a course admin of another course), and a student, get `403` with the `Result` envelope on both routes; the course admin who owns the course but is not assigned to the section gets `200` |
 | UC-NOT 4a, status | integration | Previous week inactive: `GET` returns `200` with `weekActive: false` and still lists students who owe a WAR |
 | UC-NOT invalid input | integration | Unknown `item` on either route, a malformed `week` on either route (not matching `^\d{4}-W\d{2}$`), or a `POST` without a `week`: `400`; a body that cannot be read returns "The request is malformed." with no parser detail |
-| BR-submission-owed recipients | unit and integration | A student on no team and a deactivated student are never listed (unit); a student who evaluated every active teammate but not a deactivated one does not owe the peer evaluation, and deleting a student's last activity for the week makes her owe the WAR again (integration, `SubmissionStatusServiceIntegrationTest`) |
+| BR-submission-owed recipients | unit and integration | A student on no team, a deactivated student, and a student who was not active in the week are never listed (unit); a student who evaluated every teammate active in the week but not one inactive in it does not owe the peer evaluation, a teammate deactivated after the week is still owed one, and deleting a student's last activity for the week makes her owe the WAR again (integration, `SubmissionStatusServiceIntegrationTest`) |
 | Status endpoint at scale | integration | With more than 200 activities in the week, no student who reported is listed (the old truncation) |
 | FR-NOT due day | unit | On the WAR due day only students owing the WAR are emailed, and the email lists only the WAR |
 | FR-NOT both items, one day | unit | A student owing both gets one email listing both; a student owing one gets one email listing that one |
