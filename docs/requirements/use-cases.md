@@ -1480,6 +1480,7 @@ Details:
 **Associated Information:**
 - Consequence of the deactivation: The student will no longer be able to log in or submit weekly activity reports and peer evaluations, but the student's account and her previously submitted work are kept in the system. Deactivation will NOT remove the student from the system, and the account can be reactivated in the future (UC-STU-reactivate-student: Reactivate a student). This is distinct from deletion (UC-STU-delete-student: Delete a student), which is a physical, unrecoverable delete. The course admin or instructor shall be able to cancel the use case at any time prior to submitting it.
 - Team and course section membership: Deactivation does NOT remove the student from her team or her course section. Wherever the members of her team are listed to an instructor or a course admin, the student is shown as deactivated. A student is never shown another student's account status (CO-ferpa).
+- Open session: A session the student already has open is denied access from its next request, not only at her next login (FR-SEC-active-account).
 
 **Related Use Cases:** UC-STU-delete-student: Delete a student; UC-STU-reactivate-student: Reactivate a student
 **Assumptions:**
