@@ -10,7 +10,6 @@ import team.projectpulse.user.userinvitation.UserInvitationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
@@ -22,12 +21,18 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import team.projectpulse.system.exception.ObjectNotFoundException;
+import team.projectpulse.system.exception.StudentAlreadyDeactivatedException;
 
+import java.time.Clock;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.*;
@@ -46,13 +51,19 @@ class StudentServiceTest {
     @Mock
     UserUtils userUtils;
 
-    @InjectMocks
     private StudentService studentService;
+
+    // The dev clock: Sunday 2023-08-20 23:30 in America/Chicago, week 2023-W33
+    private static final ZoneId ZONE = ZoneId.of("America/Chicago");
+    private static final LocalDateTime NOW = LocalDateTime.of(2023, 8, 20, 23, 30);
 
     List<Student> students;
 
     @BeforeEach
     void setUp() {
+        Clock clock = Clock.fixed(NOW.atZone(ZONE).toInstant(), ZONE);
+        this.studentService = new StudentService(this.studentRepository, this.sectionRepository, this.userInvitationService, this.passwordEncoder, this.userUtils, clock);
+
         // Create students
         Student john = new Student("john", "John", "Smith", "j.smith@abc.edu", "123456", true, "student");
         Student eric = new Student("eric", "Eric", "Hudson", "e.hudson@abc.edu", "123456", true, "student");
@@ -173,8 +184,68 @@ class StudentServiceTest {
         assertThat(result.getFirstName()).isEqualTo(update.getFirstName());
         assertThat(result.getLastName()).isEqualTo(update.getLastName());
         assertThat(result.getEmail()).isEqualTo(update.getEmail());
-//        assertThat(result.getRoles()).isEqualTo(update.getRoles());
-        assertThat(result.isEnabled()).isEqualTo(update.isEnabled());
+        // enabled is ignored in both directions: deactivation is its own command (UC-STU-deactivate-student)
+        assertThat(result.isEnabled()).isTrue();
+        assertThat(result.getStatusChanges()).isEmpty();
+    }
+
+    @Test
+    void testInstructorUpdateCannotReEnableADeactivatedStudent() {
+        // Given: John is deactivated
+        Student john = this.students.get(0);
+        john.deactivate(NOW.minusDays(3));
+        Student update = new Student("john", "John", "Smith", "j.smith@abc.edu", "", true, "student");
+        given(this.studentRepository.findById(1)).willReturn(Optional.of(john));
+        given(this.studentRepository.save(john)).willReturn(john);
+
+        // When
+        Student result = this.studentService.updateStudent(1, update);
+
+        // Then: still deactivated, and his history is untouched
+        assertThat(result.isEnabled()).isFalse();
+        assertThat(result.getStatusChanges()).hasSize(1);
+    }
+
+    @Test
+    void testDeactivateStudentRecordsTheDeactivationDatedByTheClock() {
+        // Given
+        Student john = this.students.get(0);
+        given(this.studentRepository.findWithLockById(1)).willReturn(Optional.of(john));
+        given(this.studentRepository.save(john)).willReturn(john);
+
+        // When
+        Student result = this.studentService.deactivateStudent(1);
+
+        // Then
+        assertThat(result.isEnabled()).isFalse();
+        assertThat(result.getStatusChanges()).singleElement().satisfies(change -> {
+            assertThat(change.getType()).isEqualTo(StudentStatusChangeType.DEACTIVATED);
+            assertThat(change.getChangedAt()).isEqualTo(NOW);
+        });
+        verify(this.studentRepository).findWithLockById(1);
+    }
+
+    @Test
+    void testDeactivateAlreadyDeactivatedStudentThrowsAndSavesNothing() {
+        // Given
+        Student john = this.students.get(0);
+        john.deactivate(NOW.minusDays(3));
+        given(this.studentRepository.findWithLockById(1)).willReturn(Optional.of(john));
+
+        // When, then (extension 3a)
+        assertThatThrownBy(() -> this.studentService.deactivateStudent(1))
+                .isInstanceOf(StudentAlreadyDeactivatedException.class)
+                .hasMessage("This student is already deactivated.");
+        assertThat(john.getStatusChanges()).hasSize(1);
+        verify(this.studentRepository, never()).save(any(Student.class));
+    }
+
+    @Test
+    void testDeactivateStudentNotFound() {
+        given(this.studentRepository.findWithLockById(99)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> this.studentService.deactivateStudent(99))
+                .isInstanceOf(ObjectNotFoundException.class);
     }
 
     @Test

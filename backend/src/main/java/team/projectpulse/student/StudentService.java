@@ -9,12 +9,12 @@ import jakarta.transaction.Transactional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.time.Clock;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -27,14 +27,16 @@ public class StudentService {
     private final UserInvitationService userInvitationService;
     private final PasswordEncoder passwordEncoder;
     private final UserUtils userUtils;
+    private final Clock clock;
 
 
-    public StudentService(StudentRepository studentRepository, SectionRepository sectionRepository, UserInvitationService userInvitationService, PasswordEncoder passwordEncoder, UserUtils userUtils) {
+    public StudentService(StudentRepository studentRepository, SectionRepository sectionRepository, UserInvitationService userInvitationService, PasswordEncoder passwordEncoder, UserUtils userUtils, Clock clock) {
         this.studentRepository = studentRepository;
         this.sectionRepository = sectionRepository;
         this.userInvitationService = userInvitationService;
         this.passwordEncoder = passwordEncoder;
         this.userUtils = userUtils;
+        this.clock = clock;
     }
 
     public Page<Student> findByCriteria(Map<String, String> searchCriteria, Pageable pageable) {
@@ -104,25 +106,40 @@ public class StudentService {
         return savedStudent;
     }
 
+    /**
+     * Updates her username, names, and email, and nothing else. In particular it never changes {@code enabled}, in
+     * either direction: deactivation is {@link #deactivateStudent} alone, so it is always confirmed and recorded in her
+     * history, and re-enabling her here would reactivate her without a recorded reactivation, making every later week
+     * read as inactive (BR-student-active-week). The fields are copied onto the managed entity; a converted
+     * {@code Student} is never merged, because that would delete her history.
+     */
     public Student updateStudent(Integer studentId, Student update) {
         Student oldStudent = this.studentRepository.findById(studentId)
                 .orElseThrow(() -> new ObjectNotFoundException("student", studentId));
 
-        // If the user is not an admin, then the user can only update her username, first rubricName, last rubricName, and email
         oldStudent.setUsername(update.getUsername());
         oldStudent.setFirstName(update.getFirstName());
         oldStudent.setLastName(update.getLastName());
         oldStudent.setEmail(update.getEmail());
 
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-
-        // If the user is an admin, then the user can update all the fields
-        if (authentication.getAuthorities().stream().anyMatch(grantedAuthority -> grantedAuthority.getAuthority().equals("ROLE_instructor"))) {
-            oldStudent.setEnabled(update.isEnabled());
-//            oldStudent.setRoles(update.getRoles());
-        }
-
         return this.studentRepository.save(oldStudent);
+    }
+
+    /**
+     * UC-STU-deactivate-student step 6: deactivates her account and records the deactivation, dated by the clock, in
+     * her history. Who may call this is the route rule's question (BR-student-lifecycle); the student is the one the
+     * rule checked, so there is nothing further to scope.
+     *
+     * <p>The student is loaded with a pessimistic write lock, so two instructors confirming at once serialize: exactly
+     * one deactivates her and the other gets extension 3a.
+     *
+     * @throws team.projectpulse.system.exception.StudentAlreadyDeactivatedException if she is already deactivated
+     */
+    public Student deactivateStudent(Integer studentId) {
+        Student student = this.studentRepository.findWithLockById(studentId)
+                .orElseThrow(() -> new ObjectNotFoundException("student", studentId));
+        student.deactivate(LocalDateTime.now(this.clock));
+        return this.studentRepository.save(student);
     }
 
     public void deleteStudent(Integer studentId) {
