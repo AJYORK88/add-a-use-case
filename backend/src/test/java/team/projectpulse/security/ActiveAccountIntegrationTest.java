@@ -8,6 +8,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
+import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.web.servlet.MockMvc;
 import team.projectpulse.AbstractIntegrationTest;
 import team.projectpulse.instructor.Instructor;
@@ -15,6 +18,8 @@ import team.projectpulse.student.Student;
 import team.projectpulse.system.StatusCode;
 
 import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
@@ -38,6 +43,8 @@ class ActiveAccountIntegrationTest extends AbstractIntegrationTest {
     EntityManager entityManager;
     @Autowired
     Clock clock;
+    @Autowired
+    JwtEncoder jwtEncoder;
 
     @Value("${api.endpoint.base-url}")
     String baseUrl;
@@ -111,6 +118,44 @@ class ActiveAccountIntegrationTest extends AbstractIntegrationTest {
         this.mockMvc.perform(get(this.baseUrl + "/students/" + JOHN_ID).header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value(StatusCode.UNAUTHORIZED));
+    }
+
+    @Test
+    @DisplayName("A correctly signed token of an active account is refused once it has expired")
+    void testAnExpiredTokenOfAnActiveAccountIsRefused() throws Exception {
+        // Oracle: FR-SEC-active-account refuses only deactivated or deleted accounts; expiry is the separate 2-hour
+        // token lifetime of the architecture-of-record (Security & Compliance > Authentication), which the default
+        // validators enforce. John is active, so only the expiry can refuse this token.
+        Instant now = Instant.now();
+        Duration lifetime = Duration.ofHours(2);
+
+        // Control: the same token, minted the same way but still within its lifetime, is accepted. So a refusal of the
+        // expired one below is for its expiry, not for its signature or its claims.
+        this.mockMvc.perform(get(this.baseUrl + "/students/" + JOHN_ID).header(HttpHeaders.AUTHORIZATION, johnsToken(now, lifetime)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(StatusCode.SUCCESS));
+
+        // Issued 3 hours ago with the 2-hour lifetime, so it expired an hour ago: far past the validators' clock skew
+        this.mockMvc.perform(get(this.baseUrl + "/students/" + JOHN_ID).header(HttpHeaders.AUTHORIZATION, johnsToken(now.minus(Duration.ofHours(3)), lifetime)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.flag").value(false))
+                .andExpect(jsonPath("$.code").value(StatusCode.UNAUTHORIZED));
+    }
+
+    /**
+     * A token for John signed with the application's own key and carrying the claims {@code JwtProvider} issues, but
+     * with the given issue time, so that its expiry can be put in the past.
+     */
+    private String johnsToken(Instant issuedAt, Duration lifetime) {
+        JwtClaimsSet claims = JwtClaimsSet.builder()
+                .issuer("self")
+                .issuedAt(issuedAt)
+                .expiresAt(issuedAt.plus(lifetime))
+                .subject("j.smith@abc.edu")
+                .claim("userId", JOHN_ID)
+                .claim("authorities", "ROLE_student")
+                .build();
+        return "Bearer " + this.jwtEncoder.encode(JwtEncoderParameters.from(claims)).getTokenValue();
     }
 
     private String login(String email) throws Exception {
