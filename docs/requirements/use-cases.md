@@ -1469,7 +1469,7 @@ Details:
 3. The course admin or instructor chooses to deactivate this student.
 4. The system alerts the course admin or instructor of the consequences of this deactivation defined in the Associated Information of this use case, warns about the deactivation, and asks for confirmation.
 5. The course admin or instructor confirms the deactivation.
-6. The system deactivates the student and alerts the course admin or instructor that this student has been deactivated.
+6. The system deactivates the student, records the deactivation with its date in her deactivation and reactivation history (BR-student-active-week), and alerts the course admin or instructor that this student has been deactivated.
 7. Use case ends.
 
 **Extensions:**
