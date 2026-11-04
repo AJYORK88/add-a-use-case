@@ -3,10 +3,12 @@ package team.projectpulse.student;
 import team.projectpulse.student.converter.StudentDtoToStudentConverter;
 import team.projectpulse.student.converter.StudentRegistrationToStudentConverter;
 import team.projectpulse.student.converter.StudentToStudentDtoConverter;
+import team.projectpulse.student.converter.StudentToTeammateDtoConverter;
 import team.projectpulse.student.dto.StudentDto;
 import team.projectpulse.student.dto.StudentRegistrationRequest;
 import team.projectpulse.system.Result;
 import team.projectpulse.system.StatusCode;
+import team.projectpulse.system.UserUtils;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -24,13 +26,17 @@ public class StudentController {
     private final StudentRegistrationToStudentConverter studentRegistrationToStudentConverter;
     private final StudentToStudentDtoConverter studentToStudentDtoConverter;
     private final StudentDtoToStudentConverter studentDtoToStudentConverter;
+    private final StudentToTeammateDtoConverter studentToTeammateDtoConverter;
+    private final UserUtils userUtils;
 
 
-    public StudentController(StudentService studentService, StudentRegistrationToStudentConverter studentRegistrationToStudentConverter, StudentToStudentDtoConverter studentToStudentDtoConverter, StudentDtoToStudentConverter studentDtoToStudentConverter) {
+    public StudentController(StudentService studentService, StudentRegistrationToStudentConverter studentRegistrationToStudentConverter, StudentToStudentDtoConverter studentToStudentDtoConverter, StudentDtoToStudentConverter studentDtoToStudentConverter, StudentToTeammateDtoConverter studentToTeammateDtoConverter, UserUtils userUtils) {
         this.studentService = studentService;
         this.studentRegistrationToStudentConverter = studentRegistrationToStudentConverter;
         this.studentToStudentDtoConverter = studentToStudentDtoConverter;
         this.studentDtoToStudentConverter = studentDtoToStudentConverter;
+        this.studentToTeammateDtoConverter = studentToTeammateDtoConverter;
+        this.userUtils = userUtils;
     }
 
     @PostMapping("/search")
@@ -47,11 +53,18 @@ public class StudentController {
         return new Result(true, StatusCode.SUCCESS, "Find student successfully", studentDto);
     }
 
+    /**
+     * The members of a team. An instructor or course admin gets each one's account status; a student gets her teammates
+     * without it (CO-ferpa). The test reads the token's literal authorities, which works because every course admin is
+     * provisioned with {@code instructor} among her roles (Crosscutting Concepts › Authorization).
+     */
     @GetMapping("/teams/{teamId}")
     public Result findStudentsByTeamId(@PathVariable Integer teamId) {
         List<Student> students = this.studentService.findStudentsByTeamId(teamId);
-        List<StudentDto> studentDtos = students.stream().map(this.studentToStudentDtoConverter::convert).collect(Collectors.toList());
-        return new Result(true, StatusCode.SUCCESS, "Find students by team id successfully", studentDtos);
+        List<?> members = this.userUtils.hasRole("ROLE_instructor")
+                ? students.stream().map(this.studentToStudentDtoConverter::convert).collect(Collectors.toList())
+                : students.stream().map(this.studentToTeammateDtoConverter::convert).collect(Collectors.toList());
+        return new Result(true, StatusCode.SUCCESS, "Find students by team id successfully", members);
     }
     
     @PostMapping

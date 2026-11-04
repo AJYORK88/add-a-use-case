@@ -543,4 +543,24 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
         return this.jsonMapper.writeValueAsString(studentDto);
     }
 
+    @Test
+    @DisplayName("CO-ferpa: a student's view of her team carries no teammate's account status")
+    void testStudentJohnSeesNoTeammateStatus() throws Exception {
+        this.mockMvc.perform(get(this.baseUrl + "/students/teams/1").header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(jsonPath("$.flag").value(true))
+                .andExpect(jsonPath("$.data", Matchers.hasSize(3)))
+                .andExpect(jsonPath("$.data[0].firstName").exists())
+                .andExpect(jsonPath("$.data[*].enabled").isEmpty())
+                .andExpect(jsonPath("$.data[*].password").isEmpty());
+    }
+
+    @Test
+    @DisplayName("An instructor's view of a team carries each member's account status")
+    void testInstructorBillSeesMemberStatus() throws Exception {
+        this.mockMvc.perform(get(this.baseUrl + "/students/teams/1").header(HttpHeaders.AUTHORIZATION, this.instructorBillToken))
+                .andExpect(jsonPath("$.flag").value(true))
+                .andExpect(jsonPath("$.data", Matchers.hasSize(3)))
+                .andExpect(jsonPath("$.data[*].enabled", Matchers.everyItem(Matchers.is(true))));
+    }
+
 }
