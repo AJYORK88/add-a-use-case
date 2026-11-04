@@ -258,8 +258,8 @@ describe('A student never sees another student’s status (CO-ferpa)', () => {
     }).as('activities')
     cy.visit('/activities/team-activities')
     cy.wait('@activities')
-    cy.contains('h3', "John Smith's Weekly Activities").should('be.visible')
-    cy.contains('h3', "Eric Hudson's Weekly Activities").should('be.visible')
+    cy.contains('h3', "John Smith's Weekly Activities").scrollIntoView().should('be.visible')
+    cy.contains('h3', "Eric Hudson's Weekly Activities").scrollIntoView().should('be.visible')
 
     cy.get('[data-cy=member-deactivated]').should('not.exist')
     cy.contains('Deactivated').should('not.exist')
