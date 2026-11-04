@@ -85,7 +85,7 @@ classDiagram
     StudentService --> Student
     StudentInstructorAuthorizationManager --> StudentSecurityService
     StudentCourseAdminAuthorizationManager --> StudentSecurityService
-    ActiveAccountJwtValidator --> UserRepository
+    ActiveAccountJwtValidator --> UserRepository : existsByIdAndEnabledTrue
     EvaluationService --> Student : isActiveIn
     ActivityService --> Student : isActiveIn
     SubmissionStatusService --> Student : isActiveIn
@@ -95,7 +95,7 @@ classDiagram
   - [`Student`](../../backend/src/main/java/team/projectpulse/student/Student.java) owns `statusChanges` (`@OneToMany(mappedBy = "student", cascade = ALL, orphanRemoval = true)`, ordered by `changedAt`).
   - `deactivate(LocalDateTime at)` throws `StudentAlreadyDeactivatedException` when she is not enabled. Otherwise it sets `enabled` false and appends a `DEACTIVATED` change.
   - `isActiveIn(String weekKey)` applies [the rule below](#active-in-a-week).
-  - New `StudentStatusChange` entity, `StudentStatusChangeType` enum, and `StudentAlreadyDeactivatedException`, all in `student/`.
+  - New `StudentStatusChange` entity and `StudentStatusChangeType` enum, in `student/`. The new `StudentAlreadyDeactivatedException` sits in `system/exception/` with every other exception `ExceptionHandlerAdvice` maps.
   - [`StudentService`](../../backend/src/main/java/team/projectpulse/student/StudentService.java):
     - New `deactivateStudent(studentId)` loads the student with a pessimistic write lock (`StudentRepository.findWithLockById`, `@Lock(PESSIMISTIC_WRITE)`), so two concurrent deactivations serialize and the second gets 3a. It takes the time from the injected `Clock` (`LocalDateTime.now(clock)`, calendar time).
     - `updateStudent` keeps copying only the named fields (username, names, email) onto the managed entity, as it does today, and no longer reads `update.isEnabled()` at all. It never assigns `statusChanges` or merges a converted `Student`: with `orphanRemoval`, a merge would delete her history.
@@ -105,7 +105,7 @@ classDiagram
   - [`StudentSecurityService`](../../backend/src/main/java/team/projectpulse/student/StudentSecurityService.java): new `isCurrentUserAdminOfStudentCourse(studentId)`. It returns `false` when the id names no student, and never throws.
 - **`security/` (foundation)**
   - New `authorizationmanagers/StudentCourseAdminAuthorizationManager` reads `studentId` and delegates to `isCurrentUserAdminOfStudentCourse`.
-  - New `ActiveAccountJwtValidator` implements `OAuth2TokenValidator<Jwt>`. It reads the `userId` claim, accepting an Integer, Long, or String the way `UserUtils.getUserId` does. It loads the user through `UserRepository.findById`, and fails with `invalid_token` when the claim is missing, no row matches, or `enabled` is false. Signature verification runs before any validator, but `DelegatingOAuth2TokenValidator` runs every validator, so an expired signed token also costs the one read. That is harmless.
+  - New `ActiveAccountJwtValidator` implements `OAuth2TokenValidator<Jwt>`. It reads the `userId` claim, accepting an Integer, Long, or String the way `UserUtils.getUserId` does. It asks `UserRepository.existsByIdAndEnabledTrue` (one indexed read that loads none of the user's eager associations), and fails with `invalid_token` when the claim is missing or malformed, no row matches, or `enabled` is false. Signature verification runs before any validator, but `DelegatingOAuth2TokenValidator` runs every validator, so an expired signed token also costs the one read. That is harmless.
   - [`SecurityConfiguration`](../../backend/src/main/java/team/projectpulse/security/SecurityConfiguration.java):
     - Two new route rules, placed above the `denyAll()` catch-all.
     - `jwtDecoder()` sets `DelegatingOAuth2TokenValidator(JwtValidators.createDefault(), activeAccountJwtValidator)`, so the default timestamp checks still run.
@@ -186,8 +186,8 @@ sequenceDiagram
     SPA->>D: API request, Bearer JWT
     D->>D: signature, timestamps (JwtValidators.createDefault)
     D->>Val: validate(jwt)
-    Val->>R: findById(userId claim)
-    R-->>Val: enabled false, or no row
+    Val->>R: existsByIdAndEnabledTrue(userId claim)
+    R-->>Val: false (deactivated, or no row)
     Val-->>D: invalid_token
     D-->>SPA: 401 (InvalidBearerTokenException, Result UNAUTHORIZED)
     SPA->>U: logs out to the login page
