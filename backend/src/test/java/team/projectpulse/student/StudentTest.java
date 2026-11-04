@@ -105,7 +105,7 @@ class StudentTest {
     }
 
     @Test
-    void testWeeksAreComparedByDateAcrossAYearBoundary() {
+    void testADeactivationOnNewYearsEveFallsInTheLastWeekOfTheYear() {
         // Sunday 2023-12-31 is in 2023-W52; Monday 2024-01-01 starts 2024-W01
         this.john.deactivate(LocalDateTime.of(2023, 12, 31, 22, 0));
 
