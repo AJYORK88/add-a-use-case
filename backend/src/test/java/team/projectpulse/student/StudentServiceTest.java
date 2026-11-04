@@ -198,12 +198,24 @@ class StudentServiceTest {
         given(this.studentRepository.findById(1)).willReturn(Optional.of(john));
         given(this.studentRepository.save(john)).willReturn(john);
 
-        // When
-        Student result = this.studentService.updateStudent(1, update);
+        // And the caller is an instructor: the role that used to be allowed to change enabled through this path
+        Instructor instructor = new Instructor();
+        instructor.setRoles("instructor");
+        MyUserPrincipal myUserPrincipal = new MyUserPrincipal(instructor);
+        SecurityContext securityContext = SecurityContextHolder.createEmptyContext();
+        securityContext.setAuthentication(new UsernamePasswordAuthenticationToken(myUserPrincipal, null, myUserPrincipal.getAuthorities()));
+        SecurityContextHolder.setContext(securityContext);
 
-        // Then: still deactivated, and his history is untouched
-        assertThat(result.isEnabled()).isFalse();
-        assertThat(result.getStatusChanges()).hasSize(1);
+        try {
+            // When
+            Student result = this.studentService.updateStudent(1, update);
+
+            // Then: still deactivated, and his history is untouched
+            assertThat(result.isEnabled()).isFalse();
+            assertThat(result.getStatusChanges()).hasSize(1);
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
     }
 
     @Test
