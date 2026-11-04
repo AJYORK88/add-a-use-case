@@ -14,7 +14,9 @@ This area is the student's account lifecycle inside the foundation's `student` s
 - **A per-request account check.** It lives in the JWT decoder and denies every deactivated account on its next request (FR-SEC-active-account).
 - **Week-scoped consumers.** `evaluation`, `activity`, and `notification` ask the student whether she was active in a week, instead of reading her current status.
 
-Reactivation (UC-STU-reactivate-student) is **not** designed here. Deactivation is one-way until that use case is built (OI-67).
+Reactivation (UC-STU-reactivate-student) is **not** designed here. Deactivation is one-way until that use case is built (OI-67): no code path writes a `REACTIVATED` change yet, so only test fixtures create one, and the rules for a student's own submissions in an inactive week (UC-EVA 1d, UC-WAR 3a) cannot be reached by a real student until then. They are built now because BR-student-active-week already requires them.
+
+The per-request account check also changes another area: a deactivated instructor's open session (UC-INS-deactivate-instructor) is now refused on its next request too, as FR-SEC-active-account requires.
 
 ## Components & classes
 
@@ -95,15 +97,15 @@ classDiagram
   - `isActiveIn(String weekKey)` applies [the rule below](#active-in-a-week).
   - New `StudentStatusChange` entity, `StudentStatusChangeType` enum, and `StudentAlreadyDeactivatedException`, all in `student/`.
   - [`StudentService`](../../backend/src/main/java/team/projectpulse/student/StudentService.java):
-    - New `deactivateStudent(studentId)` takes the time from the injected `Clock` (`LocalDateTime.now(clock)`, calendar time).
-    - `updateStudent` no longer reads `update.isEnabled()` at all.
+    - New `deactivateStudent(studentId)` loads the student with a pessimistic write lock (`StudentRepository.findWithLockById`, `@Lock(PESSIMISTIC_WRITE)`), so two concurrent deactivations serialize and the second gets 3a. It takes the time from the injected `Clock` (`LocalDateTime.now(clock)`, calendar time).
+    - `updateStudent` keeps copying only the named fields (username, names, email) onto the managed entity, as it does today, and no longer reads `update.isEnabled()` at all. It never assigns `statusChanges` or merges a converted `Student`: with `orphanRemoval`, a merge would delete her history.
   - [`StudentController`](../../backend/src/main/java/team/projectpulse/student/StudentController.java):
     - New `deactivateStudent`.
-    - `findStudentsByTeamId` returns a `TeammateDto` (a `StudentDto` without `enabled`) to a caller without `ROLE_instructor`, and the unchanged `StudentDto` to an instructor or course admin. A new `StudentToTeammateDtoConverter` builds it.
+    - `findStudentsByTeamId` returns a `TeammateDto` (a `StudentDto` without `enabled`) to a caller without `ROLE_instructor`, and the unchanged `StudentDto` to an instructor or course admin. The test is `UserUtils.hasRole("ROLE_instructor")` on the token's literal authorities, which works because every course admin is provisioned with `instructor` in her roles (the invariant under Crosscutting Concepts › Authorization). A new `StudentToTeammateDtoConverter` builds the DTO.
   - [`StudentSecurityService`](../../backend/src/main/java/team/projectpulse/student/StudentSecurityService.java): new `isCurrentUserAdminOfStudentCourse(studentId)`. It returns `false` when the id names no student, and never throws.
 - **`security/` (foundation)**
   - New `authorizationmanagers/StudentCourseAdminAuthorizationManager` reads `studentId` and delegates to `isCurrentUserAdminOfStudentCourse`.
-  - New `ActiveAccountJwtValidator` implements `OAuth2TokenValidator<Jwt>`. It reads the `userId` claim, loads the user through `UserRepository.findById`, and fails with `invalid_token` when the claim is missing, no row matches, or `enabled` is false.
+  - New `ActiveAccountJwtValidator` implements `OAuth2TokenValidator<Jwt>`. It reads the `userId` claim, accepting an Integer, Long, or String the way `UserUtils.getUserId` does. It loads the user through `UserRepository.findById`, and fails with `invalid_token` when the claim is missing, no row matches, or `enabled` is false. Signature verification runs before any validator, but `DelegatingOAuth2TokenValidator` runs every validator, so an expired signed token also costs the one read. That is harmless.
   - [`SecurityConfiguration`](../../backend/src/main/java/team/projectpulse/security/SecurityConfiguration.java):
     - Two new route rules, placed above the `denyAll()` catch-all.
     - `jwtDecoder()` sets `DelegatingOAuth2TokenValidator(JwtValidators.createDefault(), activeAccountJwtValidator)`, so the default timestamp checks still run.
@@ -113,8 +115,8 @@ classDiagram
   - [`EvaluationService`](../../backend/src/main/java/team/projectpulse/evaluation/EvaluationService.java):
     - `addPeerEvaluation` and `updatePeerEvaluation` refuse an evaluator or evaluatee who was not active in that week.
     - New `findEvaluatees(week)` lists the caller's teammates who were active in that week.
-    - `generateWeeklyPeerEvaluationReportForSection` skips students who were not active in that week, and sets `deactivated` on each `PeerEvaluationAverage` row from her current status.
-  - [`ActivityService.saveActivity`](../../backend/src/main/java/team/projectpulse/activity/ActivityService.java) refuses a submitter who was not active in the activity's week.
+    - `generateWeeklyPeerEvaluationReportForSection` skips students who were not active in that week, and sets `deactivated` on each `PeerEvaluationAverage` row from her current status. The report's "did not turn in" list is not computed here: the page takes it from `notification` `getSubmissionStatus`, as [design/not.md](not.md) already does, so a student deactivated after the week is listed in the report but not as owing.
+  - [`ActivityService.saveActivity`](../../backend/src/main/java/team/projectpulse/activity/ActivityService.java) refuses a submitter who was not active in the activity's week. Edits and deletes need no gate: creation is the only way an activity gets a week (`updateActivity` never changes it), so every stored activity of hers is in a week she was active in.
   - [`SubmissionStatusService.findOwedItems`](../../backend/src/main/java/team/projectpulse/notification/SubmissionStatusService.java) changes in two ways:
     - **Who owes:** a student on a team, with `enabled`, who `isActiveIn(week)`.
     - **Whom she owes evaluations of:** every member of her team who `isActiveIn(week)`, whatever that member's current status. This list is no longer the eligible list.
@@ -125,13 +127,15 @@ classDiagram
   - [`pages/students/EditStudentForm.vue`](../../frontend/src/pages/students/EditStudentForm.vue):
     - The Status switch is removed.
     - In its place: an Active or Deactivated tag, and a **Deactivate** button shown only while she is active.
-    - The button opens `ElMessageBox.confirm` with the consequence text from the use case's Associated Information.
+    - The form is reached from `Students.vue`, whose route requires the `instructor` permission, so assigned instructors and course admins both get it.
+    - The button opens `ElMessageBox.confirm` with the consequences from the use case's Associated Information: she can no longer log in or submit, her work is kept, and she stays on her team. The clause that she "can be reactivated in the future" is left out until UC-STU-reactivate-student ships (OI-67), because the app would be promising a control it doesn't have.
+    - Errors go through the shared Axios handler: a `409` raises its one toast ("This student is already deactivated."), after which the form reloads the student, so the tag shows Deactivated and the button disappears. A `403` sends the user to the forbidden page (3b).
     - The form no longer sends `enabled`.
   - [`pages/students/Students.vue`](../../frontend/src/pages/students/Students.vue): the status tag reads Active or Deactivated.
   - Instructor-facing member lists show a Deactivated tag:
     - [`pages/teams/Teams.vue`](../../frontend/src/pages/teams/Teams.vue), from `StudentDto.enabled`.
     - [`pages/evaluations/admin/SectionsEvaluations.vue`](../../frontend/src/pages/evaluations/admin/SectionsEvaluations.vue), from the report row's `deactivated`.
-    - [`pages/activities/admin/SectionsActivities.vue`](../../frontend/src/pages/activities/admin/SectionsActivities.vue), from the course section's student roster (`searchStudents`, instructor-only), matched by `studentId`.
+    - [`pages/activities/admin/SectionsActivities.vue`](../../frontend/src/pages/activities/admin/SectionsActivities.vue), from the course section's student roster (`searchStudents`, instructor-only, page size 100 as `Teams.vue` uses), matched by `studentId`.
   - [`pages/evaluations/SubmitTeamsEvaluations.vue`](../../frontend/src/pages/evaluations/SubmitTeamsEvaluations.vue) builds its rows from `findEvaluatees(week)` instead of `findStudentsByTeamId`, and shows no status.
 
 ## Sequence
@@ -259,6 +263,8 @@ stateDiagram-v2
 - The "not evaluated" refusal names the teammate but never says why.
 - The `SectionsActivities.vue` label comes from the instructor-only roster, not `ActivityDto`, which students also receive.
 
+These are every response a student can call that names another student. The others carry no status: `ActivityDto`, `PeerEvaluationDto`, and `TeamDto` (which embeds no students). The login `userInfo` and `GET /students/{studentId}` give a student only her own record.
+
 Rejected:
 
 - Filtering the existing team list in the browser: the browser would need every teammate's status, and the rule would be implemented twice.
@@ -267,7 +273,7 @@ Rejected:
 
 **Authorization composes managers.** The new route uses `anyOf(StudentInstructorAuthorizationManager, StudentCourseAdminAuthorizationManager)`, following the precedent in [design/not.md](not.md#key-decisions). Point 2 needs no scoped query: the object acted on is the student the route rule checked, and no id comes from a body. Rejected: `UserOwnershipAuthorizationManager`, which admits the student herself and refuses an owning course admin who is not assigned to the course section. Accepted gap: such a course admin can deactivate through the endpoint but cannot reach the student's page in the app (OI-66).
 
-**"Already deactivated" is a conflict, not a success.** `409` with a message. Rejected: an idempotent `200`, because step 6 would then announce a deactivation that did not happen.
+**"Already deactivated" is a conflict, not a success.** `409` (`StatusCode.CONFLICT`, which already exists) with a message. Rejected: an idempotent `200`, because step 6 would then announce a deactivation that did not happen. Two concurrent confirms serialize on the pessimistic lock, so exactly one succeeds. Rejected: `@Version` on `Student`, which would turn every concurrent edit of any student field into an optimistic-lock failure the existing forms don't handle. An id that names no student gets `403`, not `404`: the route rule refuses before the service runs (Crosscutting Concepts › Authorization, "Guards fail closed").
 
 **No email to her, and no explicit release of her edit locks.** The use case calls for no notification (UC-STU-reactivate-student does). Any lock she holds lapses under BR-lock-expiry. Rejected: a release hook in `deactivateStudent`, which would couple `student` to `ram`.
 
@@ -308,13 +314,15 @@ erDiagram
 | Main, owning course admin not assigned to the course section | integration | Unassign b.wei from section 2, then deactivate John: `200` |
 | 3a, already deactivated | unit (`StudentTest`, `StudentServiceTest`) and integration | `deactivate` on a deactivated student throws, and the history keeps one change. The second `POST` returns `409` with the message |
 | 3b, permission denied | integration | `403` for each of: John on himself, John on Eric, an instructor not assigned to her course section, Tim Cook (admin of another course), and an id that names no student |
-| 4a and steps 3 to 6 in the UI | Cypress, API stubbed | The Deactivate button shows only for an active student. The dialog shows the consequence text. Cancel sends no request. Confirm sends exactly one `POST`, shows success, and flips the tag. A `409` shows its message |
+| 4a and steps 3 to 6 in the UI | Cypress, API stubbed | The Deactivate button shows only for an active student. The dialog shows the consequence text. Cancel sends no request. Confirm sends exactly one `POST`, shows success, and flips the tag. A `409` raises one toast with its message, and the form then shows Deactivated |
 | FR-SEC-active-account, an open session | integration | A token John obtained before he was deactivated gets `401` on its next request. A new login gets `401`. A deactivated instructor's existing token gets `401` |
 | `ActiveAccountJwtValidator` | unit | Enabled user → valid. Disabled user, no row, or no `userId` claim → `invalid_token` |
 | BR-student-active-week, `isActiveIn` | unit (`StudentTest`) | No history → active. Deactivated in W → active in W, not in W+1. Reactivated in R → active in R, not in R-1. Deactivated and reactivated in one week → active in it. Deactivated again after a reactivation → not active in the weeks after |
 | Boundary week, end to end | integration | Deactivate John in dev (W33). For W32 his teammates still owe him an evaluation (`SubmissionStatusServiceIntegrationTest`), may submit one, and he is listed in the evaluatee list and the section report. He himself is not listed as owing W32 |
-| Inactive week, end to end | integration (a `DEACTIVATED` change inserted at 2023-07-30, W30) | For W32: an evaluation of John → `400` naming him. John's own evaluation and activity for W32 → `400`. He is absent from his teammates' evaluatee list and from the section report. His teammates do not owe him an evaluation |
-| Generic `PUT` | integration | `enabled: false` from an instructor leaves the student active, with no history change. `enabled: true` on a deactivated student leaves her deactivated |
+| Inactive week, end to end | integration (fixture: a `DEACTIVATED` change at 2023-07-30 (W30) and a `REACTIVATED` change at 2023-08-14 (W33), with John left enabled, so W31 and W32 are inactive and he can still authenticate) | For W32: an evaluation of John → `400` naming him. John's own evaluation and activity for W32 → `400`. He is absent from his teammates' evaluatee list and from the section report. His teammates do not owe him an evaluation |
+| Generic `PUT` | integration | `enabled: false` from an instructor leaves the student active, with no history change. `enabled: true` on a deactivated student leaves her deactivated. A `PUT` on a student with history keeps every history row |
+| 3a under concurrency | integration | Two deactivations of John in separate transactions: one `200`, one `409`, one history row |
+| Calendar time round trip | integration | A deactivation at the dev clock (Sunday 2023-08-20 23:30, America/Chicago) reads back as 2023-08-20T23:30, so its week is still W33. A driver that shifted it to UTC would put it in W34 |
 | CO-ferpa, the team members list | integration | `GET /students/teams/{teamId}` by a student has no `enabled` field in any element. By an instructor, `enabled` is present |
 | CO-ferpa, the evaluation form | integration and Cypress, API stubbed | The evaluatees response has only `id`, `firstName`, `lastName`. The form lists exactly that response and shows no status |
 | Decision 1, the Deactivated label | Cypress, API stubbed; integration for the report | A deactivated student shows a Deactivated tag on `Teams.vue`, `SectionsEvaluations.vue`, and `SectionsActivities.vue`, in the instructor and course admin views. No student view shows it. Integration: the section report row of a student deactivated in W33, for W32, carries `deactivated: true` |
