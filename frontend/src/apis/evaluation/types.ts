@@ -48,6 +48,7 @@ export interface PeerEvaluationAverage {
   lastName: string
   email: string
   teamName: string | null // Null for a student who is on no team: she may never have been assigned one, or have been removed from one
+  deactivated: boolean // Her account status now (UC-STU-deactivate-student); shown only on instructor pages
   averageTotalScore: number
   publicComments: string[]
   privateComments: string[]
@@ -89,4 +90,18 @@ export interface GetWeeklyPeerEvaluationsForStudentResponse {
   code: number
   message: string
   data: PeerEvaluation[]
+}
+
+// A teammate the caller evaluates for a week: names only, never an account status (CO-ferpa)
+export interface Evaluatee {
+  id: number
+  firstName: string
+  lastName: string
+}
+
+export interface FindEvaluateesResponse {
+  flag: boolean
+  code: number
+  message: string
+  data: Evaluatee[]
 }

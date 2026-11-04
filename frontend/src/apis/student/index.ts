@@ -9,7 +9,8 @@ import type {
   UpdateStudentResponse,
   Student,
   RegistrationParams,
-  FindStudentByTeamIdResponse
+  FindStudentByTeamIdResponse,
+  DeactivateStudentResponse
 } from './types'
 
 enum API {
@@ -36,6 +37,10 @@ export const updateStudent = (updatedStudent: Student) =>
     `${API.STUDENTS_ENDPOINT}/${updatedStudent.id}`,
     updatedStudent
   )
+
+// UC-STU-deactivate-student: an instructor of her course section or the course admin of its course. 409 if already deactivated.
+export const deactivateStudent = (id: number) =>
+  request.post<any, DeactivateStudentResponse>(`${API.STUDENTS_ENDPOINT}/${id}/deactivation`)
 
 export const deleteStudent = (id: number) =>
   request.delete<any, DeleteStudentResponse>(`${API.STUDENTS_ENDPOINT}/${id}`)

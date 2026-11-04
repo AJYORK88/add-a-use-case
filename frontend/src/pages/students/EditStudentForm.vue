@@ -13,14 +13,24 @@
     <el-form-item label="Username:" prop="username">
       <el-input v-model="studentBeingEdited.username"></el-input>
     </el-form-item>
-    <el-form-item label="Status:" prop="enabled">
-      <el-switch
-        v-model="studentBeingEdited.enabled"
-        inline-prompt
-        active-text="Enabled"
-        inactive-text="Disabled"
-        style="--el-switch-on-color: #13ce66; --el-switch-off-color: #ff4949"
-      />
+    <el-form-item label="Status:">
+      <div class="status">
+        <el-tag v-if="studentBeingEdited.enabled" type="success" data-cy="student-status"
+          >Active</el-tag
+        >
+        <el-tag v-else type="info" data-cy="student-status">Deactivated</el-tag>
+        <el-button
+          v-if="studentBeingEdited.enabled"
+          type="danger"
+          plain
+          size="small"
+          :loading="deactivating"
+          data-cy="student-deactivate"
+          @click="confirmDeactivation()"
+        >
+          Deactivate
+        </el-button>
+      </div>
     </el-form-item>
     <el-form-item label="First Name:" prop="firstName">
       <el-input v-model="studentBeingEdited.firstName"></el-input>
@@ -42,14 +52,16 @@
 </template>
 
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { Student } from '@/apis/student/types'
 import type { FormInstance } from 'element-plus'
-import { findStudentById, updateStudent } from '@/apis/student'
+import { deactivateStudent, findStudentById, updateStudent } from '@/apis/student'
 import { ref, onMounted } from 'vue'
 
 const { studentId } = defineProps(['studentId'])
-const emit = defineEmits(['close-dialog'])
+const emit = defineEmits(['close-dialog', 'student-deactivated'])
+
+const deactivating = ref(false)
 
 // Note that the structure of the userData is NOT the same as the User interface since the roles are stored as an array
 const studentBeingEdited = ref<Student>({
@@ -74,7 +86,6 @@ const rules = {
       trigger: 'blur'
     }
   ],
-  enabled: [{ required: true, message: 'Please select the status of the user.', trigger: 'blur' }],
   firstName: [
     { required: true, message: 'Please provide the first name of the user.', trigger: 'blur' }
   ],
@@ -110,18 +121,54 @@ async function updateExistingStudent() {
   const updatedStudent: Student = {
     id: studentBeingEdited.value.id,
     username: studentBeingEdited.value.username,
-    enabled: studentBeingEdited.value.enabled,
     firstName: studentBeingEdited.value.firstName,
     lastName: studentBeingEdited.value.lastName,
     email: studentBeingEdited.value.email
   }
-  console.log(updatedStudent)
   // Call the API to update the user
   await updateStudent(updatedStudent)
 
   ElMessage.success('Student updated successfully')
   emit('close-dialog')
 }
+
+// UC-STU-deactivate-student steps 3 to 6. The consequences are the use case's Associated Information; the promise that
+// she can be reactivated is left out until UC-STU-reactivate-student exists (OI-67).
+async function confirmDeactivation() {
+  const name = `${studentBeingEdited.value.firstName} ${studentBeingEdited.value.lastName}`
+  try {
+    await ElMessageBox.confirm(
+      `${name} will no longer be able to log in or submit weekly activity reports and peer evaluations, ` +
+        'and any session already open ends at its next action. The account and all submitted work ' +
+        'are kept, and the student stays on the same team and course section. ' +
+        'Deactivation is not deletion.',
+      `Deactivate ${name}?`,
+      { confirmButtonText: 'Deactivate', cancelButtonText: 'Cancel', type: 'warning' }
+    )
+  } catch {
+    return // 4a: cancelled, nothing changes
+  }
+
+  deactivating.value = true
+  try {
+    const result = await deactivateStudent(studentBeingEdited.value.id as number)
+    studentBeingEdited.value.enabled = result.data.enabled
+    ElMessage.success(`${name} has been deactivated.`)
+    emit('student-deactivated')
+  } catch {
+    // 3a: the shared handler has already shown "This student is already deactivated."; show her as she is now.
+    // A 403 (3b) has already moved the user to the forbidden page, so reloading is harmless there too.
+    await loadStudent(studentBeingEdited.value.id as number)
+  } finally {
+    deactivating.value = false
+  }
+}
 </script>
 
-<style scoped lang="scss"></style>
+<style scoped lang="scss">
+.status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+</style>
