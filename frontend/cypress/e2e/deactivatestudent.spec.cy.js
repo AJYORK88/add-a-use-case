@@ -116,6 +116,39 @@ describe('Deactivate a student from the edit-student form', () => {
   })
 })
 
+// The course section's evaluation report for W32, with John deactivated since and Eric still active
+function expectTheReportToMarkJohnDeactivated() {
+  const average = (studentId, firstName, lastName, deactivated) => ({
+    studentId,
+    week: '2023-W32',
+    firstName,
+    lastName,
+    email: `${firstName}@abc.edu`,
+    teamName: 'Team1',
+    deactivated,
+    averageTotalScore: 50,
+    publicComments: [],
+    privateComments: [],
+    ratingAverages: []
+  })
+  cy.intercept('GET', '**/evaluations/sections/*/week/*', {
+    body: ok({
+      sectionName: '2023-2024',
+      week: '2023-W32',
+      peerEvaluationAverages: [
+        average(4, 'John', 'Smith', true),
+        average(5, 'Eric', 'Hudson', false)
+      ]
+    })
+  }).as('report')
+  cy.visit('/section-evaluations')
+  cy.wait('@report')
+  cy.contains('tr', 'Smith, John')
+    .find('[data-cy=member-deactivated]')
+    .should('have.text', 'Deactivated')
+  cy.contains('tr', 'Hudson, Eric').find('[data-cy=member-deactivated]').should('not.exist')
+}
+
 describe('The Deactivated label on instructor pages', () => {
   beforeEach(() => {
     cy.login('b.wei@abc.edu', '123456')
@@ -145,35 +178,7 @@ describe('The Deactivated label on instructor pages', () => {
   })
 
   it('marks a deactivated student in the section evaluation report', () => {
-    const average = (studentId, firstName, lastName, deactivated) => ({
-      studentId,
-      week: '2023-W32',
-      firstName,
-      lastName,
-      email: `${firstName}@abc.edu`,
-      teamName: 'Team1',
-      deactivated,
-      averageTotalScore: 50,
-      publicComments: [],
-      privateComments: [],
-      ratingAverages: []
-    })
-    cy.intercept('GET', '**/evaluations/sections/*/week/*', {
-      body: ok({
-        sectionName: '2023-2024',
-        week: '2023-W32',
-        peerEvaluationAverages: [
-          average(4, 'John', 'Smith', true),
-          average(5, 'Eric', 'Hudson', false)
-        ]
-      })
-    }).as('report')
-    cy.visit('/section-evaluations')
-    cy.wait('@report')
-    cy.contains('tr', 'Smith, John')
-      .find('[data-cy=member-deactivated]')
-      .should('have.text', 'Deactivated')
-    cy.contains('tr', 'Hudson, Eric').find('[data-cy=member-deactivated]').should('not.exist')
+    expectTheReportToMarkJohnDeactivated()
   })
 
   it('marks a deactivated student on the section activities page, from the instructor roster', () => {
@@ -205,6 +210,17 @@ describe('The Deactivated label on instructor pages', () => {
       .find('[data-cy=member-deactivated]')
       .should('have.text', 'Deactivated')
     cy.contains('tr', 'Eric Hudson').find('[data-cy=member-deactivated]').should('not.exist')
+  })
+})
+
+describe('The Deactivated label for an instructor who is not the course admin', () => {
+  // Bill is assigned to course section 2 but does not own its course; every test above logs in as Bingyang, who does
+  beforeEach(() => {
+    cy.login('b.gates@abc.edu', '123456')
+  })
+
+  it('marks a deactivated student in the section evaluation report', () => {
+    expectTheReportToMarkJohnDeactivated()
   })
 })
 
