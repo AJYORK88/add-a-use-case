@@ -2032,6 +2032,9 @@ The student shall be able to cancel the use case at any time prior to submitting
 - **1a. The student is not assigned to a team:**
   - 1a1. The system does not accept the activity and informs the student that she must be assigned to a team before she can manage activities in a weekly activity report (BR-team-assignment-required).
   - 1a2. Use case ends.
+- **3a. The student was not active in the selected week:**
+  - 3a1. The system does not accept an activity for that week and informs the student that she may submit a weekly activity report only for a week she was active in (BR-student-active-week).
+  - 3a2. Use case ends.
 - **8a. Input validation rule violation:**
   - 8a1. The system alerts the student that an input validation rule is violated and displays the nature and location of the error.
   - 8a2. The student corrects the mistake and returns to step 8 of the normal flow.
@@ -2041,7 +2044,7 @@ The student shall be able to cancel the use case at any time prior to submitting
 
 **Priority:** High
 **Frequency of Use:** Approximately 35-40 users, average of 3 usages per week.
-**Business Rules:** BR-team-scoped-access, BR-role-based-access (a student manages activities only in her own weekly activity report, within a team she belongs to); BR-team-assignment-required (only a student assigned to a team submits one).
+**Business Rules:** BR-team-scoped-access, BR-role-based-access (a student manages activities only in her own weekly activity report, within a team she belongs to); BR-team-assignment-required (only a student assigned to a team submits one); BR-student-active-week (only for a week she was active in).
 
 **Associated Information:**
 - Details: The student can add activities to a WAR. For each activity, the student shall provide the following: Activity category: DEVELOPMENT, TESTING, BUGFIX, REVIEW, COMMUNICATION, DOCUMENTATION, REQUIREMENTS, DESIGN, PLANNING, LEARNING, DEPLOYMENT, SUPPORT, MISCELLANEOUS Activity Description Planned hours Actual hours Status: In progress, Under testing, Done. The above properties are editable. The student shall be able to cancel the use case at any time prior to submitting it.
@@ -2223,13 +2226,16 @@ Report generating algorithm: N/A
 - **1c. The student is not assigned to a team:**
   - 1c1. The system does not accept a peer evaluation and informs the student that she must be assigned to a team before she can submit peer evaluations (BR-team-assignment-required).
   - 1c2. Use case ends.
+- **1d. The student was not active in the week to be evaluated:**
+  - 1d1. The system does not accept a peer evaluation for that week and informs the student that she may submit a peer evaluation only for a week she was active in (BR-student-active-week).
+  - 1d2. Use case ends.
 - **4a. Input validation rule violation:**
   - 4a1. The system alerts the student that an input validation rule is violated and displays the nature and location of the error.
   - 4a2. The student corrects the mistake and returns to step 4 of the normal flow.
 
 **Priority:** High
 **Frequency of Use:** Approximately 35-40 users, 1 usage per week.
-**Business Rules:** BR-team-scoped-access (the student evaluates the members of a team she belongs to, and no other team), BR-team-assignment-required (only a student assigned to a team submits one), BR-active-weeks, BR-evaluation-editable-until-close, BR-evaluation-submission-window, BR-evaluation-private-comment
+**Business Rules:** BR-team-scoped-access (the student evaluates the members of a team she belongs to, and no other team), BR-team-assignment-required (only a student assigned to a team submits one), BR-active-weeks, BR-evaluation-editable-until-close, BR-evaluation-submission-window, BR-evaluation-private-comment, BR-student-active-week (only for a week she was active in, and only of teammates active in it)
 
 **Associated Information:**
 
