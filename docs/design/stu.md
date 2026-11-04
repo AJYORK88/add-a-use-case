@@ -294,8 +294,8 @@ erDiagram
     }
 ```
 
-- **Migration `V7__student_status_history.sql`.** It creates the table, with an index on `(student_id, changed_at)`. It also backfills one `DEACTIVATED` row at `NOW()` for every `peer_evaluation_user` row with `dtype = 'Student'` and `enabled = 0`, so a student disabled before history existed counts as deactivated from the moment the migration runs and active in every earlier week.
-- **Accepted imprecision.** `NOW()` is the database server's time (UTC on Azure), not `app.timezone`, so a migration run near midnight can date the backfill in a neighbouring week. That is harmless for accounts already disabled.
+- **Migration `V7__student_status_history.sql`.** It creates the table, with an index on `(student_id, changed_at)`. It also backfills one `DEACTIVATED` row, dated 21 days before the migration runs (`NOW() - INTERVAL 21 DAY`), for every `peer_evaluation_user` row with `dtype = 'Student'` and `enabled = 0`. When such a student was really disabled is unknown. Dating the row at `NOW()` would make her active in the migration week and every earlier week (a change dated in a week makes her active in it), so for the two weeks after the deploy her former teammates would owe her a peer evaluation, be reminded about it, and see her on the instructor's report. Dated 21 days back, the week the date falls in still counts as active, every week after it counts as inactive (including the week open for evaluation at deploy time and the next one), and every earlier week counts as active.
+- **Accepted imprecision.** A student disabled less than 21 days before the run counts as inactive in a week or two she was in fact active in, so those weeks no longer list her or accept a submission from or about her. `NOW()` is also the database server's time (UTC on Azure), not `app.timezone`, so a run near midnight can move the backfilled date into a neighbouring week, which shifts her last active week by one.
 - **`dev`.** `ddl-auto` builds the table, and `DataInitializer` has no disabled students, so it seeds no history.
 
 ## Reuse & cross-cutting
@@ -326,7 +326,7 @@ erDiagram
 | CO-ferpa, the team members list | integration | `GET /students/teams/{teamId}` by a student has no `enabled` field in any element. By an instructor, `enabled` is present |
 | CO-ferpa, the evaluation form | integration and Cypress, API stubbed | The evaluatees response has only `id`, `firstName`, `lastName`. The form lists exactly that response and shows no status |
 | Decision 1, the Deactivated label | Cypress, API stubbed; integration for the report | A deactivated student shows a Deactivated tag on `Teams.vue`, `SectionsEvaluations.vue`, and `SectionsActivities.vue`, in the instructor and course admin views. No student view shows it. Integration: the section report row of a student deactivated in W33, for W32, carries `deactivated: true` |
-| Migration backfill | manual check against a Flyway-migrated database (the integration suite runs on the `dev` schema) | A student with `enabled = 0` gets exactly one `DEACTIVATED` row, and an enabled student gets none |
+| Migration backfill | manual check against a Flyway-migrated database (the integration suite runs on the `dev` schema) | A student with `enabled = 0` gets exactly one `DEACTIVATED` row, dated 21 days before the run, and an enabled student gets none |
 
 ## Open questions / risks
 

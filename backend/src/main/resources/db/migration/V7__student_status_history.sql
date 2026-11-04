@@ -12,10 +12,18 @@ CREATE TABLE `student_status_change` (
   CONSTRAINT `CK_student_status_change_type` CHECK (`change_type` in ('DEACTIVATED', 'REACTIVATED'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
--- A student disabled before this history existed counts as deactivated from the moment this migration runs, and
--- active in every earlier week. NOW() is the database server's time (UTC on Azure), not app.timezone, so a run near
--- midnight can date this in a neighbouring week; that is harmless for accounts that were already disabled.
+-- A student disabled before this history existed has no recorded deactivation date, so the backfill dates one 21
+-- days before this migration runs. Dated at the run itself, she would count as active in the week the migration runs
+-- and in every earlier week (a change dated in a week makes her active in it), so for the two weeks after the deploy
+-- her former teammates would be listed as owing her a peer evaluation, reminded about it, and shown her on the
+-- instructor's report. Dated 21 days back, the week that date falls in (three weeks before the run) still counts as
+-- active, and every week after it, including the one open for evaluation at deploy time and the one after, counts as
+-- inactive. Earlier weeks keep counting as active, because when she was really disabled is unknown.
+-- The cost: a student disabled less than 21 days before the run counts as inactive in a week or two she was in fact
+-- active in, so those weeks no longer list her or accept a submission from or about her.
+-- NOW() is the database server's time (UTC on Azure), not app.timezone, so a run near midnight can move the backfilled
+-- date into a neighbouring week, which shifts by one week which old week is her last active one.
 INSERT INTO `student_status_change` (`student_id`, `change_type`, `changed_at`)
-SELECT `id`, 'DEACTIVATED', NOW(6)
+SELECT `id`, 'DEACTIVATED', NOW(6) - INTERVAL 21 DAY
 FROM `peer_evaluation_user`
 WHERE `dtype` = 'Student' AND `enabled` = b'0';
