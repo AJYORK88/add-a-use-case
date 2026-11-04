@@ -85,7 +85,7 @@ classDiagram
     StudentService --> Student
     StudentInstructorAuthorizationManager --> StudentSecurityService
     StudentCourseAdminAuthorizationManager --> StudentSecurityService
-    ActiveAccountJwtValidator --> UserRepository
+    ActiveAccountJwtValidator --> UserRepository : existsByIdAndEnabledTrue
     EvaluationService --> Student : isActiveIn
     ActivityService --> Student : isActiveIn
     SubmissionStatusService --> Student : isActiveIn
@@ -95,7 +95,7 @@ classDiagram
   - [`Student`](../../backend/src/main/java/team/projectpulse/student/Student.java) owns `statusChanges` (`@OneToMany(mappedBy = "student", cascade = ALL, orphanRemoval = true)`, ordered by `changedAt`).
   - `deactivate(LocalDateTime at)` throws `StudentAlreadyDeactivatedException` when she is not enabled. Otherwise it sets `enabled` false and appends a `DEACTIVATED` change.
   - `isActiveIn(String weekKey)` applies [the rule below](#active-in-a-week).
-  - New `StudentStatusChange` entity, `StudentStatusChangeType` enum, and `StudentAlreadyDeactivatedException`, all in `student/`.
+  - New `StudentStatusChange` entity and `StudentStatusChangeType` enum, in `student/`. The new `StudentAlreadyDeactivatedException` sits in `system/exception/` with every other exception `ExceptionHandlerAdvice` maps.
   - [`StudentService`](../../backend/src/main/java/team/projectpulse/student/StudentService.java):
     - New `deactivateStudent(studentId)` loads the student with a pessimistic write lock (`StudentRepository.findWithLockById`, `@Lock(PESSIMISTIC_WRITE)`), so two concurrent deactivations serialize and the second gets 3a. It takes the time from the injected `Clock` (`LocalDateTime.now(clock)`, calendar time).
     - `updateStudent` keeps copying only the named fields (username, names, email) onto the managed entity, as it does today, and no longer reads `update.isEnabled()` at all. It never assigns `statusChanges` or merges a converted `Student`: with `orphanRemoval`, a merge would delete her history.
@@ -105,7 +105,7 @@ classDiagram
   - [`StudentSecurityService`](../../backend/src/main/java/team/projectpulse/student/StudentSecurityService.java): new `isCurrentUserAdminOfStudentCourse(studentId)`. It returns `false` when the id names no student, and never throws.
 - **`security/` (foundation)**
   - New `authorizationmanagers/StudentCourseAdminAuthorizationManager` reads `studentId` and delegates to `isCurrentUserAdminOfStudentCourse`.
-  - New `ActiveAccountJwtValidator` implements `OAuth2TokenValidator<Jwt>`. It reads the `userId` claim, accepting an Integer, Long, or String the way `UserUtils.getUserId` does. It loads the user through `UserRepository.findById`, and fails with `invalid_token` when the claim is missing, no row matches, or `enabled` is false. Signature verification runs before any validator, but `DelegatingOAuth2TokenValidator` runs every validator, so an expired signed token also costs the one read. That is harmless.
+  - New `ActiveAccountJwtValidator` implements `OAuth2TokenValidator<Jwt>`. It reads the `userId` claim, accepting an Integer, Long, or String the way `UserUtils.getUserId` does. It asks `UserRepository.existsByIdAndEnabledTrue` (one indexed read that loads none of the user's eager associations), and fails with `invalid_token` when the claim is missing or malformed, no row matches, or `enabled` is false. Signature verification runs before any validator, but `DelegatingOAuth2TokenValidator` runs every validator, so an expired signed token also costs the one read. That is harmless.
   - [`SecurityConfiguration`](../../backend/src/main/java/team/projectpulse/security/SecurityConfiguration.java):
     - Two new route rules, placed above the `denyAll()` catch-all.
     - `jwtDecoder()` sets `DelegatingOAuth2TokenValidator(JwtValidators.createDefault(), activeAccountJwtValidator)`, so the default timestamp checks still run.
@@ -186,8 +186,8 @@ sequenceDiagram
     SPA->>D: API request, Bearer JWT
     D->>D: signature, timestamps (JwtValidators.createDefault)
     D->>Val: validate(jwt)
-    Val->>R: findById(userId claim)
-    R-->>Val: enabled false, or no row
+    Val->>R: existsByIdAndEnabledTrue(userId claim)
+    R-->>Val: false (deactivated, or no row)
     Val-->>D: invalid_token
     D-->>SPA: 401 (InvalidBearerTokenException, Result UNAUTHORIZED)
     SPA->>U: logs out to the login page
@@ -294,8 +294,8 @@ erDiagram
     }
 ```
 
-- **Migration `V7__student_status_history.sql`.** It creates the table, with an index on `(student_id, changed_at)`. It also backfills one `DEACTIVATED` row at `NOW()` for every `peer_evaluation_user` row with `dtype = 'Student'` and `enabled = 0`, so a student disabled before history existed counts as deactivated from the moment the migration runs and active in every earlier week.
-- **Accepted imprecision.** `NOW()` is the database server's time (UTC on Azure), not `app.timezone`, so a migration run near midnight can date the backfill in a neighbouring week. That is harmless for accounts already disabled.
+- **Migration `V7__student_status_history.sql`.** It creates the table, with an index on `(student_id, changed_at)`. It also backfills one `DEACTIVATED` row, dated 21 days before the migration runs (`NOW() - INTERVAL 21 DAY`), for every `peer_evaluation_user` row with `dtype = 'Student'` and `enabled = 0`. When such a student was really disabled is unknown. Dating the row at `NOW()` would make her active in the migration week and every earlier week (a change dated in a week makes her active in it), so for the two weeks after the deploy her former teammates would owe her a peer evaluation, be reminded about it, and see her on the instructor's report. Dated 21 days back, the week the date falls in still counts as active, every week after it counts as inactive (including the week open for evaluation at deploy time and the next one), and every earlier week counts as active.
+- **Accepted imprecision.** A student disabled less than 21 days before the run counts as inactive in a week or two she was in fact active in, so those weeks no longer list her or accept a submission from or about her. `NOW()` is also the database server's time (UTC on Azure), not `app.timezone`, so a run near midnight can move the backfilled date into a neighbouring week, which shifts her last active week by one.
 - **`dev`.** `ddl-auto` builds the table, and `DataInitializer` has no disabled students, so it seeds no history.
 
 ## Reuse & cross-cutting
@@ -318,7 +318,7 @@ erDiagram
 | FR-SEC-active-account, an open session | integration | A token John obtained before he was deactivated gets `401` on its next request. A new login gets `401`. A deactivated instructor's existing token gets `401` |
 | `ActiveAccountJwtValidator` | unit | Enabled user → valid. Disabled user, no row, or no `userId` claim → `invalid_token` |
 | BR-student-active-week, `isActiveIn` | unit (`StudentTest`) | No history → active. Deactivated in W → active in W, not in W+1. Reactivated in R → active in R, not in R-1. Deactivated and reactivated in one week → active in it. Deactivated again after a reactivation → not active in the weeks after |
-| Boundary week, end to end | integration | Deactivate John in dev (W33). For W32 his teammates still owe him an evaluation (`SubmissionStatusServiceIntegrationTest`), may submit one, and he is listed in the evaluatee list and the section report. He himself is not listed as owing W32 |
+| Boundary week, end to end | integration (`StudentActiveWeekIntegrationTest`) | Deactivate John in dev (W33). For W32 his teammates still owe him an evaluation, may submit one, and he is listed in the evaluatee list and the section report. He himself is not listed as owing W32 |
 | Inactive week, end to end | integration (fixture: a `DEACTIVATED` change at 2023-07-30 (W30) and a `REACTIVATED` change at 2023-08-14 (W33), with John left enabled, so W31 and W32 are inactive and he can still authenticate) | For W32: an evaluation of John → `400` naming him. John's own evaluation and activity for W32 → `400`. He is absent from his teammates' evaluatee list and from the section report. His teammates do not owe him an evaluation |
 | Generic `PUT` | integration | `enabled: false` from an instructor leaves the student active, with no history change. `enabled: true` on a deactivated student leaves her deactivated. A `PUT` on a student with history keeps every history row |
 | 3a under concurrency | integration | Two deactivations of John in separate transactions: one `200`, one `409`, one history row |
@@ -326,7 +326,7 @@ erDiagram
 | CO-ferpa, the team members list | integration | `GET /students/teams/{teamId}` by a student has no `enabled` field in any element. By an instructor, `enabled` is present |
 | CO-ferpa, the evaluation form | integration and Cypress, API stubbed | The evaluatees response has only `id`, `firstName`, `lastName`. The form lists exactly that response and shows no status |
 | Decision 1, the Deactivated label | Cypress, API stubbed; integration for the report | A deactivated student shows a Deactivated tag on `Teams.vue`, `SectionsEvaluations.vue`, and `SectionsActivities.vue`, in the instructor and course admin views. No student view shows it. Integration: the section report row of a student deactivated in W33, for W32, carries `deactivated: true` |
-| Migration backfill | manual check against a Flyway-migrated database (the integration suite runs on the `dev` schema) | A student with `enabled = 0` gets exactly one `DEACTIVATED` row, and an enabled student gets none |
+| Migration backfill | manual check against a Flyway-migrated database (the integration suite runs on the `dev` schema) | A student with `enabled = 0` gets exactly one `DEACTIVATED` row, dated 21 days before the run, and an enabled student gets none |
 
 ## Open questions / risks
 

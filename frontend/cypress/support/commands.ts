@@ -64,7 +64,9 @@ Cypress.Commands.add('login', (username, password) => {
   cy.get('.button').click() // Click the login button
 
   // Add any additional checks to confirm successful login (e.g., URL change, token check, etc.)
-  cy.url().should('include', '/home') // Ensure user is redirected to dashboard after login
+  // Ensure user is redirected to dashboard after login. A real login is a BCrypt-12 check on the backend, and the first
+  // one of a run also waits for Vite to compile the home page, which can outlast the 4 s default
+  cy.url({ timeout: 15000 }).should('include', '/home')
 })
 
 // Cypress.Commands.add('login', (username, password) => {

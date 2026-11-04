@@ -20,6 +20,7 @@ import org.springframework.data.jpa.domain.Specification;
 
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.List;
 import java.util.Map;
@@ -200,6 +201,26 @@ class ActivityServiceTest {
         assertThatThrownBy(() -> this.activityService.saveActivity(new Activity()))
                 .isInstanceOf(ActivityIllegalArgumentException.class)
                 .hasMessage("Only a student may submit a weekly activity report.");
+        verify(this.activityRepository, never()).save(any(Activity.class));
+    }
+
+    @Test
+    void testSaveActivityRejectsAWeekTheSubmitterWasNotActiveIn() {
+        // Given: John was deactivated in W30, so he was not active in W31 (UC-WAR 3a, BR-student-active-week)
+        Team team = new Team("Team1", "Team 1 description", "https://www.team1.com");
+        team.setTeamId(1);
+        Student john = new Student("j.smith@abc.edu", "John", "Smith", "j.smith@abc.edu", "123456", true, "student");
+        john.setTeam(team);
+        john.deactivate(LocalDateTime.of(2023, 7, 30, 12, 0));
+        given(this.userUtils.hasRole("ROLE_student")).willReturn(true);
+        given(this.userUtils.getStudent()).willReturn(john);
+        Activity newActivity = new Activity();
+        newActivity.setWeek("2023-W31");
+
+        // When and then
+        assertThatThrownBy(() -> this.activityService.saveActivity(newActivity))
+                .isInstanceOf(ActivityIllegalArgumentException.class)
+                .hasMessage("You may submit a weekly activity report only for a week you were active in.");
         verify(this.activityRepository, never()).save(any(Activity.class));
     }
 

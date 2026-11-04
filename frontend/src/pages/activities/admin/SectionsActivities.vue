@@ -31,13 +31,18 @@
             border
             scrollbar-always-on
           >
-            <el-table-column
-              label="Student"
-              width="150"
-              min-width="100"
-              prop="studentName"
-              fixed
-            ></el-table-column>
+            <el-table-column label="Student" width="150" min-width="100" prop="studentName" fixed>
+              <template #default="{ row }">
+                {{ row.studentName }}
+                <el-tag
+                  v-if="deactivatedStudentIds.has(row.studentId)"
+                  type="info"
+                  size="small"
+                  data-cy="member-deactivated"
+                  >Deactivated</el-tag
+                >
+              </template>
+            </el-table-column>
             <el-table-column label="Category" width="150" prop="category">
               <template #default="{ row }">
                 <el-tag type="warning">{{ row.category }}</el-tag>
@@ -160,6 +165,7 @@ import type {
   PeerEvaluation
 } from '@/apis/evaluation/types'
 import { getWeeklyPeerEvaluationsForStudent } from '@/apis/evaluation'
+import { searchStudents } from '@/apis/student'
 
 const teamSearchCriteria = ref<TeamSearchCriteria>({
   sectionId: NaN
@@ -175,6 +181,9 @@ const sectionId = ref<number>(NaN)
 const loading = ref<boolean>(true)
 const settingsStore = useSettingsStore()
 const remindDialogVisible = ref(false)
+// Ids of the course section's deactivated students (UC-STU-deactivate-student). Read from the instructor-only roster,
+// never from ActivityDto, which students also receive, so no student is shown another student's status (CO-ferpa).
+const deactivatedStudentIds = ref<Set<number>>(new Set())
 
 // Load data when the component is mounted
 onMounted(async () => {
@@ -247,12 +256,22 @@ async function loadStudentsMissingActivity() {
   })
 }
 
+async function loadDeactivatedStudentIds() {
+  const result = await searchStudents({ page: 0, size: 100 }, {}) // The page size Teams.vue uses for the roster
+  deactivatedStudentIds.value = new Set(
+    result.data.content
+      .filter((student) => student.enabled === false)
+      .map((student) => student.id as number)
+  )
+}
+
 async function prepareSectionWeeklyActivities() {
   loading.value = true
   try {
     await loadTeams()
     await loadActivities()
     await loadStudentsMissingActivity()
+    await loadDeactivatedStudentIds()
   } finally {
     loading.value = false
   }

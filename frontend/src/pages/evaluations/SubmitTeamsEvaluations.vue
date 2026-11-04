@@ -120,8 +120,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { findStudentsByTeamId } from '@/apis/student'
-import type { Student, FindStudentByTeamIdResponse } from '@/apis/student/types'
+import type { Student } from '@/apis/student/types'
 import { findSectionById } from '@/apis/section'
 import { findRubricById } from '@/apis/rubric'
 import type { FindRubricByIdResponse, Criterion } from '@/apis/rubric/types'
@@ -130,12 +129,14 @@ import { useUserInfoStore } from '@/stores/userInfo'
 import type { FindSectionByIdResponse } from '@/apis/section/types'
 import {
   submitEvaluation,
+  findEvaluatees,
   getEvaluationsByEvaluatorIdAndWeek,
   updateEvaluation,
   sendPeerEvaluationSubmissionConfirmationEmail
 } from '@/apis/evaluation'
 import { ElMessage } from 'element-plus'
 import type {
+  Evaluatee,
   FetchPeerEvaluationsResponse,
   PeerEvaluation,
   Rating,
@@ -154,7 +155,7 @@ let isNewSubmission = true // Flag to indicate if this is a new submission or an
 
 const teamId = ref<number>(NaN) // Team ID of the student
 
-const students = ref<Student[]>([]) // Students on the same team
+const students = ref<Evaluatee[]>([]) // Teammates to evaluate for the week, decided by the server
 const sectionId = ref<number>() // Section ID of the team
 const criteria = ref<Criterion[]>([]) // Criteria used for peer evaluations
 const isLoading = ref(false)
@@ -170,7 +171,7 @@ onMounted(async () => {
     ElMessage.error('You have not been assigned a team yet.')
     return
   }
-  await loadStudents()
+  if (!(await loadStudents())) return
   sectionId.value = (userInfoStore.userInfo as Student).sectionId
   await loadCriteria()
   loading.value = true
@@ -178,11 +179,16 @@ onMounted(async () => {
   loading.value = false
 })
 
-// Load activities based on the search criteria
-async function loadStudents() {
-  // On the back end, the page number starts from 0, so subtract 1 here
-  const result: FindStudentByTeamIdResponse = await findStudentsByTeamId(teamId.value)
-  students.value = result.data
+// Load the teammates to evaluate for the week: those who were active in it, herself included (BR-student-active-week).
+// The server decides who is listed and sends names only, so no teammate's account status reaches the browser (CO-ferpa).
+// A refusal (not active in that week, or on no team) is already shown by the shared request handler.
+async function loadStudents(): Promise<boolean> {
+  try {
+    students.value = (await findEvaluatees(previousWeek.value)).data
+    return true
+  } catch {
+    return false
+  }
 }
 
 // Load criteria information

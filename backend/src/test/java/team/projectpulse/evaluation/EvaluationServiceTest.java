@@ -8,6 +8,7 @@ import team.projectpulse.section.Section;
 import team.projectpulse.section.SectionRepository;
 import team.projectpulse.student.Student;
 import team.projectpulse.student.StudentRepository;
+import team.projectpulse.system.UserUtils;
 import team.projectpulse.system.exception.PeerEvaluationIllegalArgumentException;
 import team.projectpulse.team.Team;
 import team.projectpulse.user.MyUserPrincipal;
@@ -30,6 +31,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
@@ -44,6 +46,8 @@ class EvaluationServiceTest {
     SectionRepository sectionRepository;
     @Mock
     Clock clock; // Mock the clock bean
+    @Mock
+    UserUtils userUtils;
 
     @InjectMocks
     EvaluationService evaluationService;
@@ -415,6 +419,154 @@ class EvaluationServiceTest {
     }
 
     @Test
+    void testAddPeerEvaluationEvaluatorNotActiveInTheWeek() {
+        // Given: Amanda was deactivated in W30, so she was not active in W31 (UC-EVA-submit-evaluation 1d)
+        givenTheClockIsIn2023W32();
+        this.amanda.deactivate(LocalDateTime.of(2023, 7, 30, 12, 0));
+        PeerEvaluation newPeerEvaluation = new PeerEvaluation("2023-W31", amanda, woody, List.of(), "public comment", "private comment");
+
+        // When
+        Throwable throwable = catchThrowable(() -> this.evaluationService.addPeerEvaluation(newPeerEvaluation));
+
+        // Then
+        assertThat(throwable)
+                .isInstanceOf(PeerEvaluationIllegalArgumentException.class)
+                .hasMessage("You may submit a peer evaluation only for a week you were active in.");
+        verify(this.evaluationRepository, never()).save(any());
+    }
+
+    @Test
+    void testAddPeerEvaluationEvaluateeNotActiveInTheWeek() {
+        // Given: Woody was deactivated in W30, so he was not active in W31 (UC-EVA-submit-evaluation 4b)
+        givenTheClockIsIn2023W32();
+        this.woody.deactivate(LocalDateTime.of(2023, 7, 30, 12, 0));
+        PeerEvaluation newPeerEvaluation = new PeerEvaluation("2023-W31", amanda, woody, List.of(), "public comment", "private comment");
+
+        // When
+        Throwable throwable = catchThrowable(() -> this.evaluationService.addPeerEvaluation(newPeerEvaluation));
+
+        // Then: names him, and never says why (CO-ferpa)
+        assertThat(throwable)
+                .isInstanceOf(PeerEvaluationIllegalArgumentException.class)
+                .hasMessage("Woody Allen is not evaluated for that week.");
+        verify(this.evaluationRepository, never()).save(any());
+    }
+
+    @Test
+    void testAddPeerEvaluationOfATeammateDeactivatedAfterTheWeekSucceeds() {
+        // Given: Woody was deactivated in W33, after W31, so he was active in W31 and is still evaluated for it
+        givenTheClockIsIn2023W32();
+        this.woody.deactivate(LocalDateTime.of(2023, 8, 20, 23, 30));
+        PeerEvaluation newPeerEvaluation = new PeerEvaluation("2023-W31", amanda, woody, List.of(), "public comment", "private comment");
+        given(this.evaluationRepository.save(newPeerEvaluation)).willReturn(newPeerEvaluation);
+
+        // When
+        PeerEvaluation saved = this.evaluationService.addPeerEvaluation(newPeerEvaluation);
+
+        // Then
+        assertThat(saved).isSameAs(newPeerEvaluation);
+    }
+
+    @Test
+    void testUpdatePeerEvaluationOfAnEvaluateeNotActiveInTheWeek() {
+        // Given: an evaluation of Eric for W31, and Eric's history says he was not active in W31
+        givenTheClockIsIn2023W32();
+        this.eric.deactivate(LocalDateTime.of(2023, 7, 30, 12, 0));
+        PeerEvaluation oldPeerEvaluation = new PeerEvaluation("2023-W31", this.john, this.eric, List.of(), "public comment", "private comment");
+        PeerEvaluation update = new PeerEvaluation("2023-W31", this.john, this.eric, List.of(), "new public comment", "new private comment");
+        given(this.evaluationRepository.findById(1)).willReturn(Optional.of(oldPeerEvaluation));
+
+        // When
+        Throwable throwable = catchThrowable(() -> this.evaluationService.updatePeerEvaluation(1, update));
+
+        // Then
+        assertThat(throwable)
+                .isInstanceOf(PeerEvaluationIllegalArgumentException.class)
+                .hasMessage("Eric Wong is not evaluated for that week.");
+        verify(this.evaluationRepository, never()).save(any());
+    }
+
+    @Test
+    void testUpdatePeerEvaluationByAnEvaluatorNotActiveInTheWeek() {
+        // Given
+        givenTheClockIsIn2023W32();
+        this.john.deactivate(LocalDateTime.of(2023, 7, 30, 12, 0));
+        PeerEvaluation oldPeerEvaluation = new PeerEvaluation("2023-W31", this.john, this.eric, List.of(), "public comment", "private comment");
+        PeerEvaluation update = new PeerEvaluation("2023-W31", this.john, this.eric, List.of(), "new public comment", "new private comment");
+        given(this.evaluationRepository.findById(1)).willReturn(Optional.of(oldPeerEvaluation));
+
+        // When
+        Throwable throwable = catchThrowable(() -> this.evaluationService.updatePeerEvaluation(1, update));
+
+        // Then
+        assertThat(throwable)
+                .isInstanceOf(PeerEvaluationIllegalArgumentException.class)
+                .hasMessage("You may submit a peer evaluation only for a week you were active in.");
+    }
+
+    @Test
+    void testFindEvaluateesListsTeammatesActiveInTheWeekIncludingHerself() {
+        // Given: John asks for W31; Jerry was not active in W31, and Eric was deactivated after it
+        Student jerry = this.students.get(2);
+        jerry.deactivate(LocalDateTime.of(2023, 7, 30, 12, 0));
+        this.eric.deactivate(LocalDateTime.of(2023, 8, 20, 23, 30));
+        given(this.userUtils.getUserId()).willReturn(3);
+        given(this.studentRepository.findById(3)).willReturn(Optional.of(this.john));
+        given(this.studentRepository.findByTeamTeamId(1)).willReturn(List.of(this.john, this.eric, jerry));
+
+        // When
+        List<Student> evaluatees = this.evaluationService.findEvaluatees("2023-W31");
+
+        // Then
+        assertThat(evaluatees).containsExactly(this.john, this.eric);
+    }
+
+    @Test
+    void testFindEvaluateesRefusesACallerWhoIsNotAStudent() {
+        given(this.userUtils.getUserId()).willReturn(1); // Bingyang, an instructor
+        given(this.studentRepository.findById(1)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> this.evaluationService.findEvaluatees("2023-W31"))
+                .isInstanceOf(PeerEvaluationIllegalArgumentException.class)
+                .hasMessage("Only a student may submit a peer evaluation.");
+    }
+
+    @Test
+    void testFindEvaluateesRefusesACallerOnNoTeam() {
+        Student tracy = new Student("tracy", "Tracy", "Nicholson", "t.nicholson@abc.edu", "123456", true, "student");
+        given(this.userUtils.getUserId()).willReturn(15);
+        given(this.studentRepository.findById(15)).willReturn(Optional.of(tracy));
+
+        assertThatThrownBy(() -> this.evaluationService.findEvaluatees("2023-W31"))
+                .isInstanceOf(PeerEvaluationIllegalArgumentException.class)
+                .hasMessage("You must be assigned to a team before submitting a peer evaluation.");
+    }
+
+    @Test
+    void testFindEvaluateesRefusesACallerNotActiveInTheWeek() {
+        this.john.deactivate(LocalDateTime.of(2023, 7, 30, 12, 0));
+        given(this.userUtils.getUserId()).willReturn(3);
+        given(this.studentRepository.findById(3)).willReturn(Optional.of(this.john));
+
+        assertThatThrownBy(() -> this.evaluationService.findEvaluatees("2023-W31"))
+                .isInstanceOf(PeerEvaluationIllegalArgumentException.class)
+                .hasMessage("You may submit a peer evaluation only for a week you were active in.");
+    }
+
+    @Test
+    void testFindEvaluateesRefusesAMalformedWeek() {
+        assertThatThrownBy(() -> this.evaluationService.findEvaluatees("2023-33"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // Aug 8, 2023 falls in 2023-W32, which makes 2023-W31 the previous week
+    private void givenTheClockIsIn2023W32() {
+        Clock fixedClock = Clock.fixed(LocalDate.of(2023, 8, 8).atStartOfDay(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
+        given(this.clock.instant()).willReturn(fixedClock.instant());
+        given(this.clock.getZone()).willReturn(fixedClock.getZone());
+    }
+
+    @Test
     void testUpdatePeerEvaluation() {
         // Given
         // Aug 8, 2023 falls in 2023-W32, which makes 2023-W31 the previous week and this evaluation's window open
@@ -590,6 +742,26 @@ class EvaluationServiceTest {
         assertThat(report.getPeerEvaluationAverages().get(1).getAverageTotalScore()).isCloseTo(50.0, within(0.01));
         assertThat(report.getPeerEvaluationAverages().get(2).getAverageTotalScore()).isCloseTo(51.0, within(0.01));
         assertThat(report.getPeerEvaluationAverages().get(3).getAverageTotalScore()).isCloseTo(52.0, within(0.01));
+    }
+
+    @Test
+    void testWeeklyPeerEvaluationReportSkipsStudentsInactiveInTheWeekAndMarksDeactivatedOnes() {
+        // Given: Woody was not active in W31 (deactivated in W30); Eric was deactivated in W33, after W31
+        this.woody.deactivate(LocalDateTime.of(2023, 7, 30, 12, 0));
+        this.eric.deactivate(LocalDateTime.of(2023, 8, 20, 23, 30));
+        given(this.sectionRepository.findById(anyInt())).willReturn(Optional.of(new Section("2023-2024", LocalDate.of(2023, 8, 14), LocalDate.of(2024, 4, 29), true, DayOfWeek.MONDAY, LocalTime.of(23, 59), DayOfWeek.TUESDAY, LocalTime.of(23, 59))));
+        given(this.studentRepository.findBySectionSectionId(anyInt())).willReturn(this.students);
+
+        // When
+        WeeklyPeerEvaluationReport report = this.evaluationService.generateWeeklyPeerEvaluationReportForSection(2, "2023-W31");
+
+        // Then: Woody is absent; Eric is listed and marked deactivated; the others are not
+        assertThat(report.getPeerEvaluationAverages())
+                .extracting(PeerEvaluationAverage::getFirstName)
+                .containsExactly("John", "Eric", "Jerry", "Amanda");
+        assertThat(report.getPeerEvaluationAverages())
+                .extracting(PeerEvaluationAverage::isDeactivated)
+                .containsExactly(false, true, false, false);
     }
 
     @Test

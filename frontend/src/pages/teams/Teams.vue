@@ -46,6 +46,13 @@
                   <template #item="{ element }">
                     <div class="trello-card">
                       <span>{{ element.firstName }} {{ element.lastName }}</span>
+                      <el-tag
+                        v-if="element.enabled === false"
+                        type="info"
+                        size="small"
+                        data-cy="member-deactivated"
+                        >Deactivated</el-tag
+                      >
                       <el-icon
                         v-if="element.teamId"
                         class="remove-icon"

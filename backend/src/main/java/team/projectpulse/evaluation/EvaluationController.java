@@ -2,6 +2,8 @@ package team.projectpulse.evaluation;
 
 import team.projectpulse.evaluation.converter.PeerEvaluationDtoToPeerEvaluationConverter;
 import team.projectpulse.evaluation.converter.PeerEvaluationToPeerEvaluationDtoConverter;
+import team.projectpulse.evaluation.converter.StudentToEvaluateeDtoConverter;
+import team.projectpulse.evaluation.dto.EvaluateeDto;
 import team.projectpulse.evaluation.dto.PeerEvaluationDto;
 import team.projectpulse.system.Result;
 import team.projectpulse.system.StatusCode;
@@ -20,11 +22,14 @@ public class EvaluationController {
 
     private final PeerEvaluationDtoToPeerEvaluationConverter peerEvaluationDtoToPeerEvaluationConverter;
 
+    private final StudentToEvaluateeDtoConverter studentToEvaluateeDtoConverter;
 
-    public EvaluationController(EvaluationService evaluationService, PeerEvaluationToPeerEvaluationDtoConverter peerEvaluationToPeerEvaluationDtoConverter, PeerEvaluationDtoToPeerEvaluationConverter peerEvaluationDtoToPeerEvaluationConverter) {
+
+    public EvaluationController(EvaluationService evaluationService, PeerEvaluationToPeerEvaluationDtoConverter peerEvaluationToPeerEvaluationDtoConverter, PeerEvaluationDtoToPeerEvaluationConverter peerEvaluationDtoToPeerEvaluationConverter, StudentToEvaluateeDtoConverter studentToEvaluateeDtoConverter) {
         this.evaluationService = evaluationService;
         this.peerEvaluationToPeerEvaluationDtoConverter = peerEvaluationToPeerEvaluationDtoConverter;
         this.peerEvaluationDtoToPeerEvaluationConverter = peerEvaluationDtoToPeerEvaluationConverter;
+        this.studentToEvaluateeDtoConverter = studentToEvaluateeDtoConverter;
     }
 
     @PostMapping
@@ -33,6 +38,12 @@ public class EvaluationController {
         PeerEvaluation savedPeerEvaluation = this.evaluationService.addPeerEvaluation(newPeerEvaluation);
         PeerEvaluationDto savedPeerEvaluationDto = this.peerEvaluationToPeerEvaluationDtoConverter.convert(savedPeerEvaluation);
         return new Result(true, StatusCode.SUCCESS, "Add peer evaluation successfully", savedPeerEvaluationDto);
+    }
+
+    @GetMapping("/weeks/{week}/evaluatees")
+    public Result findEvaluatees(@PathVariable String week) {
+        List<EvaluateeDto> evaluatees = this.evaluationService.findEvaluatees(week).stream().map(this.studentToEvaluateeDtoConverter::convert).toList();
+        return new Result(true, StatusCode.SUCCESS, "Find evaluatees successfully", evaluatees);
     }
 
     @GetMapping("/evaluators/{evaluatorId}/week/{week}")

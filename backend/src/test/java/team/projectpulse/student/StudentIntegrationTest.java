@@ -18,14 +18,33 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 
+import jakarta.persistence.EntityManager;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
+import team.projectpulse.instructor.Instructor;
+import team.projectpulse.section.Section;
+import team.projectpulse.system.exception.StudentAlreadyDeactivatedException;
+
+import java.time.LocalDateTime;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @DisplayName("Integration tests for Student API endpoints")
 class StudentIntegrationTest extends AbstractIntegrationTest {
@@ -305,6 +324,243 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN))
                 .andExpect(jsonPath("$.message").value("No permission."))
                 .andExpect(jsonPath("$.data").value("Access Denied"));
+    }
+
+    // ----- UC-STU-deactivate-student -----
+    // The dev clock is Sunday 2023-08-20 23:30 in America/Chicago (2023-W33). John (4) and Eric (5) are on Team1 in
+    // course section 2, which Bingyang (course admin of its course) and Bill are assigned to. Tim is the course admin
+    // of another course.
+
+    private static final int JOHN_ID = 4;
+    private static final LocalDateTime DEV_NOW = LocalDateTime.of(2023, 8, 20, 23, 30);
+
+    @Autowired
+    EntityManager entityManager;
+    @Autowired
+    StudentService studentService;
+    @Autowired
+    PlatformTransactionManager transactionManager;
+
+    @Test
+    @DisplayName("Main flow: an instructor assigned to her course section deactivates her, and the deactivation is recorded")
+    void testInstructorBillDeactivatesJohn() throws Exception {
+        // Given
+        long activities = count("select count(a) from Activity a where a.student.id = " + JOHN_ID);
+        long evaluations = count("select count(e) from PeerEvaluation e where e.evaluator.id = " + JOHN_ID + " or e.evaluatee.id = " + JOHN_ID);
+
+        // When
+        this.mockMvc.perform(post(this.baseUrl + "/students/" + JOHN_ID + "/deactivation").header(HttpHeaders.AUTHORIZATION, this.instructorBillToken))
+                .andExpect(jsonPath("$.flag").value(true))
+                .andExpect(jsonPath("$.code").value(StatusCode.SUCCESS))
+                .andExpect(jsonPath("$.message").value("Deactivate student successfully"))
+                .andExpect(jsonPath("$.data.id").value(JOHN_ID))
+                .andExpect(jsonPath("$.data.enabled").value(false))
+                .andExpect(jsonPath("$.data.sectionId").value(2))
+                .andExpect(jsonPath("$.data.teamName").value("Team1"));
+
+        // Then: one DEACTIVATED change, dated by the dev clock, read back from the database
+        this.entityManager.flush();
+        this.entityManager.clear();
+        Student john = this.entityManager.find(Student.class, JOHN_ID);
+        assertThat(john.isEnabled()).isFalse();
+        assertThat(john.getStatusChanges()).singleElement().satisfies(change -> {
+            assertThat(change.getType()).isEqualTo(StudentStatusChangeType.DEACTIVATED);
+            // Calendar time round trip: a driver that shifted this to UTC would read back 2023-08-21T04:30, in W34
+            assertThat(change.getChangedAt()).isEqualTo(DEV_NOW);
+        });
+        // Her course section, team, and work are kept
+        assertThat(john.getSection().getSectionId()).isEqualTo(2);
+        assertThat(john.getTeam().getTeamName()).isEqualTo("Team1");
+        assertThat(count("select count(a) from Activity a where a.student.id = " + JOHN_ID)).isEqualTo(activities);
+        assertThat(count("select count(e) from PeerEvaluation e where e.evaluator.id = " + JOHN_ID + " or e.evaluatee.id = " + JOHN_ID)).isEqualTo(evaluations);
+    }
+
+    @Test
+    @DisplayName("Main flow: the course admin who owns the course may deactivate her without being assigned to her course section")
+    void testCourseAdminNotAssignedToTheSectionDeactivatesJohn() throws Exception {
+        // Given: Bingyang is no longer assigned to course section 2, but still owns its course
+        Section section2 = this.entityManager.find(Section.class, 2);
+        Instructor bingyang = this.entityManager.createQuery("select i from Instructor i where i.email = 'b.wei@abc.edu'", Instructor.class).getSingleResult();
+        section2.removeInstructor(bingyang);
+        this.entityManager.flush();
+
+        // When, then
+        this.mockMvc.perform(post(this.baseUrl + "/students/" + JOHN_ID + "/deactivation").header(HttpHeaders.AUTHORIZATION, this.adminToken))
+                .andExpect(jsonPath("$.flag").value(true))
+                .andExpect(jsonPath("$.code").value(StatusCode.SUCCESS))
+                .andExpect(jsonPath("$.data.enabled").value(false));
+    }
+
+    @Test
+    @DisplayName("3a: deactivating a student who is already deactivated is a conflict, and nothing changes")
+    void testDeactivatingAnAlreadyDeactivatedStudentIsAConflict() throws Exception {
+        this.mockMvc.perform(post(this.baseUrl + "/students/" + JOHN_ID + "/deactivation").header(HttpHeaders.AUTHORIZATION, this.instructorBillToken))
+                .andExpect(jsonPath("$.code").value(StatusCode.SUCCESS));
+
+        this.mockMvc.perform(post(this.baseUrl + "/students/" + JOHN_ID + "/deactivation").header(HttpHeaders.AUTHORIZATION, this.adminToken))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.flag").value(false))
+                .andExpect(jsonPath("$.code").value(StatusCode.CONFLICT))
+                .andExpect(jsonPath("$.message").value("This student is already deactivated."));
+
+        assertThat(historyRowsOf(JOHN_ID)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("3b: a student, herself included, cannot deactivate a student")
+    void testStudentsCannotDeactivateStudents() throws Exception {
+        expectForbidden(JOHN_ID, this.studentJohnToken); // herself
+        expectForbidden(5, this.studentJohnToken);       // a teammate
+        assertJohnUntouched();
+    }
+
+    @Test
+    @DisplayName("3b: another course's admin cannot deactivate her")
+    void testAnotherCoursesAdminCannotDeactivateJohn() throws Exception {
+        expectForbidden(JOHN_ID, this.adminTimToken);
+        assertJohnUntouched();
+    }
+
+    @Test
+    @DisplayName("3b: an instructor no longer assigned to her course section cannot deactivate her")
+    void testAnUnassignedInstructorCannotDeactivateJohn() throws Exception {
+        // Given: Bill is no longer assigned to course section 2, and does not own its course
+        Section section2 = this.entityManager.find(Section.class, 2);
+        Instructor bill = this.entityManager.createQuery("select i from Instructor i where i.email = 'b.gates@abc.edu'", Instructor.class).getSingleResult();
+        section2.removeInstructor(bill);
+        this.entityManager.flush();
+
+        expectForbidden(JOHN_ID, this.instructorBillToken);
+        assertJohnUntouched();
+    }
+
+    @Test
+    @DisplayName("3b: an id that names no student is refused at the route, not reported as missing")
+    void testDeactivatingAnIdThatNamesNoStudentIsForbidden() throws Exception {
+        expectForbidden(9999, this.adminToken);
+    }
+
+    @Test
+    @DisplayName("FR-SEC-active-account: her open session is refused on its next request once she is deactivated")
+    void testJohnsOpenSessionIsRefusedAfterHeIsDeactivated() throws Exception {
+        this.mockMvc.perform(post(this.baseUrl + "/students/" + JOHN_ID + "/deactivation").header(HttpHeaders.AUTHORIZATION, this.instructorBillToken))
+                .andExpect(jsonPath("$.code").value(StatusCode.SUCCESS));
+
+        this.mockMvc.perform(get(this.baseUrl + "/students/" + JOHN_ID).header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(StatusCode.UNAUTHORIZED));
+    }
+
+    @Test
+    @DisplayName("The generic PUT ignores enabled: it neither deactivates her nor records anything")
+    void testInstructorPutWithEnabledFalseLeavesJohnActive() throws Exception {
+        this.mockMvc.perform(put(this.baseUrl + "/students/" + JOHN_ID).contentType(MediaType.APPLICATION_JSON).content(johnAsJson(false)).header(HttpHeaders.AUTHORIZATION, this.instructorBillToken))
+                .andExpect(jsonPath("$.code").value(StatusCode.SUCCESS))
+                .andExpect(jsonPath("$.data.enabled").value(true));
+
+        assertThat(historyRowsOf(JOHN_ID)).isZero();
+    }
+
+    @Test
+    @DisplayName("The generic PUT ignores enabled: it cannot re-enable her, and keeps her history")
+    void testInstructorPutWithEnabledTrueLeavesJohnDeactivated() throws Exception {
+        this.mockMvc.perform(post(this.baseUrl + "/students/" + JOHN_ID + "/deactivation").header(HttpHeaders.AUTHORIZATION, this.instructorBillToken))
+                .andExpect(jsonPath("$.code").value(StatusCode.SUCCESS));
+
+        this.mockMvc.perform(put(this.baseUrl + "/students/" + JOHN_ID).contentType(MediaType.APPLICATION_JSON).content(johnAsJson(true)).header(HttpHeaders.AUTHORIZATION, this.instructorBillToken))
+                .andExpect(jsonPath("$.code").value(StatusCode.SUCCESS))
+                .andExpect(jsonPath("$.data.firstName").value("Johnny"))
+                .andExpect(jsonPath("$.data.enabled").value(false));
+
+        assertThat(historyRowsOf(JOHN_ID)).isEqualTo(1);
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED) // Each deactivation must commit in its own transaction
+    @DisplayName("3a under concurrency: two instructors confirming at once deactivate her exactly once")
+    void testTwoConcurrentDeactivationsSerialize() throws Exception {
+        CountDownLatch start = new CountDownLatch(1);
+        Callable<String> deactivate = () -> {
+            start.await();
+            try {
+                this.studentService.deactivateStudent(JOHN_ID);
+                return "deactivated";
+            } catch (StudentAlreadyDeactivatedException ex) {
+                return "conflict";
+            }
+        };
+        TransactionTemplate transaction = new TransactionTemplate(this.transactionManager);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<String> first = executor.submit(deactivate);
+            Future<String> second = executor.submit(deactivate);
+            start.countDown();
+            List<String> outcomes = List.of(first.get(30, TimeUnit.SECONDS), second.get(30, TimeUnit.SECONDS));
+
+            assertThat(outcomes).containsExactlyInAnyOrder("deactivated", "conflict");
+            Long historyRows = transaction.execute(status -> historyRowsOf(JOHN_ID));
+            assertThat(historyRows).isEqualTo(1L);
+        } finally {
+            executor.shutdownNow();
+            // These commits bypassed the test's rollback, so put John back as the seed has him for the other tests
+            transaction.executeWithoutResult(status -> {
+                this.entityManager.createQuery("delete from StudentStatusChange c where c.student.id = :id").setParameter("id", JOHN_ID).executeUpdate();
+                this.entityManager.createQuery("update PeerEvaluationUser u set u.enabled = true where u.id = :id").setParameter("id", JOHN_ID).executeUpdate();
+            });
+        }
+    }
+
+    private void expectForbidden(int studentId, String token) throws Exception {
+        this.mockMvc.perform(post(this.baseUrl + "/students/" + studentId + "/deactivation").header(HttpHeaders.AUTHORIZATION, token))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.flag").value(false))
+                .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN));
+    }
+
+    private void assertJohnUntouched() {
+        this.entityManager.flush();
+        this.entityManager.clear();
+        assertThat(this.entityManager.find(Student.class, JOHN_ID).isEnabled()).isTrue();
+        assertThat(historyRowsOf(JOHN_ID)).isZero();
+    }
+
+    private long historyRowsOf(int studentId) {
+        return this.entityManager.createQuery("select count(c) from StudentStatusChange c where c.student.id = :id", Long.class)
+                .setParameter("id", studentId).getSingleResult();
+    }
+
+    private long count(String jpql) {
+        return this.entityManager.createQuery(jpql, Long.class).getSingleResult();
+    }
+
+    private String johnAsJson(boolean enabled) throws Exception {
+        Map<String, Object> studentDto = new HashMap<>();
+        studentDto.put("username", "j.smith@abc.edu");
+        studentDto.put("firstName", "Johnny");
+        studentDto.put("lastName", "Smith");
+        studentDto.put("email", "j.smith@abc.edu");
+        studentDto.put("enabled", enabled);
+        return this.jsonMapper.writeValueAsString(studentDto);
+    }
+
+    @Test
+    @DisplayName("CO-ferpa: a student's view of her team carries no teammate's account status")
+    void testStudentJohnSeesNoTeammateStatus() throws Exception {
+        this.mockMvc.perform(get(this.baseUrl + "/students/teams/1").header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(jsonPath("$.flag").value(true))
+                .andExpect(jsonPath("$.data", Matchers.hasSize(3)))
+                .andExpect(jsonPath("$.data[0].firstName").exists())
+                .andExpect(jsonPath("$.data[*].enabled").isEmpty())
+                .andExpect(jsonPath("$.data[*].password").isEmpty());
+    }
+
+    @Test
+    @DisplayName("An instructor's view of a team carries each member's account status")
+    void testInstructorBillSeesMemberStatus() throws Exception {
+        this.mockMvc.perform(get(this.baseUrl + "/students/teams/1").header(HttpHeaders.AUTHORIZATION, this.instructorBillToken))
+                .andExpect(jsonPath("$.flag").value(true))
+                .andExpect(jsonPath("$.data", Matchers.hasSize(3)))
+                .andExpect(jsonPath("$.data[*].enabled", Matchers.everyItem(Matchers.is(true))));
     }
 
 }

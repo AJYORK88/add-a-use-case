@@ -8,7 +8,8 @@ import type {
   GeneratePeerEvaluationAveragesForOneStudentResponse,
   PeriodParams,
   GenerateWeeklyPeerEvaluationAveragesForSectionResponse,
-  GetWeeklyPeerEvaluationsForStudentResponse
+  GetWeeklyPeerEvaluationsForStudentResponse,
+  FindEvaluateesResponse
 } from './types'
 
 enum API {
@@ -51,3 +52,8 @@ export const getWeeklyPeerEvaluationsForStudent = (studentId: number, week: stri
 // API: /evaluations/weeks/{week}/receipt
 export const sendPeerEvaluationSubmissionConfirmationEmail = (week: string) =>
   request.post<any, void>(`${API.EVALUATIONS_ENDPOINT}/weeks/${week}/receipt`)
+
+// API: /evaluations/weeks/{week}/evaluatees. The caller's teammates who were active in the week, herself included
+// (BR-student-active-week); the server decides who is listed
+export const findEvaluatees = (week: string) =>
+  request.get<any, FindEvaluateesResponse>(`${API.EVALUATIONS_ENDPOINT}/weeks/${week}/evaluatees`)

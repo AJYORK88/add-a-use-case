@@ -12,6 +12,7 @@ import team.projectpulse.student.Student;
 import team.projectpulse.student.StudentRepository;
 import team.projectpulse.team.Team;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -43,7 +44,7 @@ class SubmissionStatusServiceTest {
 
     Student alice; // Team A
     Student bob;   // Team A
-    Student carol; // Team A, deactivated
+    Student carol; // Team A, deactivated in W30, so inactive in W32
     Student dave;  // Team B
     Student erin;  // on no team
 
@@ -124,6 +125,32 @@ class SubmissionStatusServiceTest {
         assertThat(this.submissionStatusService.findOwing(SECTION_ID, SubmittableItem.WEEKLY_ACTIVITY_REPORT, WEEK)).isEmpty();
     }
 
+    @Test
+    void testATeammateDeactivatedAfterTheWeekIsStillOwedButOwesNothing() {
+        // Given: Bob is deactivated in W33, after WEEK (W32), so he was active in W32. Alice evaluated only herself.
+        this.bob.deactivate(LocalDateTime.of(2023, 8, 20, 23, 30));
+        given(this.evaluationService.findEvaluateeIdsByEvaluator(SECTION_ID, WEEK)).willReturn(Map.of(10, Set.of(10)));
+
+        // When
+        List<Student> owing = this.submissionStatusService.findOwing(SECTION_ID, SubmittableItem.PEER_EVALUATION, WEEK);
+
+        // Then: Alice still owes an evaluation of Bob; Bob himself is not listed as owing
+        assertThat(owing).containsExactly(this.alice, this.dave);
+    }
+
+    @Test
+    void testATeammateInactiveInTheWeekIsNotOwed() {
+        // Given: Alice and Bob evaluated each other and themselves, but not Carol, who was inactive in W32
+        given(this.evaluationService.findEvaluateeIdsByEvaluator(SECTION_ID, WEEK))
+                .willReturn(Map.of(10, Set.of(10, 11), 11, Set.of(10, 11), 13, Set.of(13)));
+
+        // When
+        List<Student> owing = this.submissionStatusService.findOwing(SECTION_ID, SubmittableItem.PEER_EVALUATION, WEEK);
+
+        // Then
+        assertThat(owing).isEmpty();
+    }
+
     private static Team team(int id, String name) {
         Team team = new Team(name, name + " description", "https://example.com");
         team.setTeamId(id);
@@ -131,8 +158,11 @@ class SubmissionStatusServiceTest {
     }
 
     private static Student student(int id, String firstName, String lastName, Team team, boolean enabled) {
-        Student student = new Student(firstName + "@abc.edu", firstName, lastName, firstName + "@abc.edu", "123456", enabled, "student");
+        Student student = new Student(firstName + "@abc.edu", firstName, lastName, firstName + "@abc.edu", "123456", true, "student");
         student.setId(id);
+        if (!enabled) {
+            student.deactivate(LocalDateTime.of(2023, 7, 30, 12, 0)); // Sunday of W30, so inactive in W31 and after
+        }
         if (team != null) {
             team.addStudent(student);
         }

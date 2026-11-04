@@ -13,6 +13,13 @@ export interface Student {
   teamName?: string
 }
 
+/**
+ * A member of the caller's team as a student caller receives it from GET /students/teams/{teamId}: a Student without
+ * its account status, because a student is never shown another student's status (CO-ferpa). An instructor or course
+ * admin receives the full Student, with enabled.
+ */
+export type Teammate = Omit<Student, 'enabled' | 'password'>
+
 export interface PaginationParams {
   page: number
   size: number
@@ -72,7 +79,14 @@ export interface FindStudentByTeamIdResponse {
   flag: boolean
   code: number
   message: string
-  data: Student[]
+  data: (Student | Teammate)[]
+}
+
+export interface DeactivateStudentResponse {
+  flag: boolean
+  code: number
+  message: string
+  data: Student
 }
 
 export interface CreateStudentResponse {
